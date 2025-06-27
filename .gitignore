@@ -1,0 +1,92 @@
+# Drupal 7 .gitignore
+
+# Core Drupal files
+sites/*/files/
+sites/*/private/
+
+# Configuration files with sensitive data
+sites/*/settings.local.php
+sites/*/settings.php
+sites/*/services.yml
+sites/*/local.services.yml
+
+# Database dumps and backups
+*.sql
+*.sql.gz
+*.sql.bz2
+backup_*.tar.gz
+backup_*.sql
+
+# Lando local configuration
+.lando.local.yml
+.lando/
+
+# Docker files
+docker-compose.override.yml
+.env
+.env.local
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.cache
+
+# Node.js dependencies (if any)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Composer dependencies
+vendor/
+
+# Drupal specific ignores
+sites/all/modules/contrib/
+sites/all/themes/contrib/
+sites/all/libraries/
+
+# Files directory
+sites/default/files/
+sites/default/private/
+
+# Drupal multisite
+sites/*/files/
+sites/*/private/
+
+# Drupal configuration
+sites/*/settings.php
+sites/*/settings.local.php
+
+# Drupal file permissions
+sites/default/default.settings.php
+
+# Drupal cache
+cache/
+
+# Development tools
+.htpasswd
+adminer.php
+info.php
+
+# Specific to this project
+d7_source_for_migration.sql
+juliush761_mysql_db.sql
+SETUP_REPORT.md
+activeContext.md 

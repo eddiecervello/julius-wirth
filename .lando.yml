@@ -1,0 +1,47 @@
+name: juliuswirth
+recipe: drupal7
+config:
+  webroot: .
+  php: '7.4'
+  database: mariadb:10.4
+  xdebug: false
+
+services:
+  # Database service with specific configuration
+  database:
+    type: mariadb:10.4
+    config:
+      database: juliush761
+    creds:
+      user: drupal7
+      password: drupal7
+      database: juliush761
+  
+
+# Tooling commands for development
+tooling:
+  db-import:
+    service: database
+    description: Import the database dump
+    cmd: mysql -u root juliush761 < /app/juliush761_mysql_db.sql
+  
+  db-export:
+    service: database  
+    description: Export database
+    cmd: mysqldump -u root juliush761
+  
+  drush:
+    service: appserver
+    description: Run drush commands
+    cmd: drush
+  
+  fix-permissions:
+    service: appserver
+    description: Fix file permissions
+    cmd: chmod -R 755 sites/default/files
+    user: root
+
+# URL configuration  
+proxy:
+  appserver:
+    - juliuswirth.lndo.site

@@ -1,0 +1,126 @@
+﻿/* ---------- Basic Layout Styles ----------- */
+
+/*html,
+body,
+#page  {
+  height: 100%;
+}*/
+@font-face {
+font-family: "Raleway";
+src: url("../fonts/Raleway-Regular.ttf");
+}
+@font-face {
+font-family: "Raleway Bold";
+src: url("../fonts/Raleway-Bold.ttf");
+}
+@font-face {
+font-family: "Hind";
+src: url("../fonts/hind-regular.otf");
+}
+@font-face {
+font-family: "Hind Bold";
+src: url("../fonts/hind-bold.otf");
+}
+@font-face {
+font-family: "Playfair Display";
+src: url("../fonts/PlayfairDisplay-Regular.otf");
+}
+@font-face {
+font-family: "Playfair Display Italic";
+src: url("../fonts/PlayfairDisplay-Italic.otf");
+}
+#page-wrapper {
+  width: 100%;
+  min-width: 300px;
+}
+#header div.section,
+#featured div.section,
+#messages div.section,
+#footer-columns,
+#footer,
+#main,
+#res-menu .section,
+.section,
+#triptych {
+  max-width: 1140px;
+  margin-left: auto;
+  margin-right: auto;
+  min-width: 300px;
+}
+.page-products #main, .page-taxonomy-term #main {
+    max-width: 100%;
+margin-left: 50px;
+margin-right: 50px;
+}
+#header div.section {
+  position: relative;
+}
+.without-secondary-menu .region-header {
+  margin-top: 15px;
+}
+#content,
+#sidebar-first,
+#sidebar-second,
+.region-triptych-first,
+.region-triptych-middle,
+.region-triptych-last,
+.region-footer-firstcolumn,
+.region-footer-secondcolumn,
+.region-footer-thirdcolumn,
+.region-footer-fourthcolumn {
+  display: inline;
+  float: left; /* LTR */
+  position: relative;
+}
+.one-sidebar #content {
+width: 76%;
+}
+.two-sidebars #content {
+  max-width: 454px;
+}
+.no-sidebars #content {
+  max-width: 1140px;
+  float: none;
+}
+#sidebar-first,
+#sidebar-second {
+  max-width: 302px;
+margin-left: 0px;
+min-width: 220px;
+width: 22%;
+}
+#main-wrapper {
+  min-height: 300px;
+}
+#content .section,
+.sidebar .section {
+  padding: 0 15px 0 0;
+}
+#breadcrumb {
+  margin: 0 15px;
+}
+.region-triptych-first,
+.region-triptych-middle,
+.region-triptych-last {
+  margin: 20px 20px 30px;
+  width: 280px;
+}
+#footer-wrapper {
+  padding: 45px 5px 45px;
+}
+.region-footer-firstcolumn,
+.region-footer-secondcolumn,
+.region-footer-thirdcolumn,
+.region-footer-fourthcolumn {
+  padding: 0 10px;
+}
+.region-footer-firstcolumn {
+    width:58%;
+    margin-right: 10%;
+}
+.region-footer-thirdcolumn {
+    width: 25%;
+}
+#footer {
+  max-width: 1140px;
+}

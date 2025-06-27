@@ -1,0 +1,191 @@
+@media screen and (max-width: 320px) {
+ 
+ #user-register-form, #user-login, #user-pass, #user-profile-form {
+     text-align: center;
+ }
+ #user-register-form input.form-text, #user-register-form textarea.form-textarea, #user-register-form select.form-select, #user-register-form .grippie, #user-login input.form-text, #user-pass input.form-text,
+ #user-profile-form input.form-text, #user-profile-form textarea.form-textarea, #user-profile-form select.form-select, #user-profile-form .grippie {
+     width: 90%;
+     margin-left: auto;
+     margin-right: auto;
+ } 
+ .confirm-parent, .password-parent {
+     width: 100%;
+ }
+ .password-strength {
+     display: none;
+ }
+ .password-confirm {
+     display: none;
+ }
+ #edit-pass-pass2 {
+     display: block;
+ }
+ .form-item-pass .description {
+     display: none !important;
+ }
+ #user-login .form-item-pass .description {
+     display: block !important;
+ }
+ .page-user-register .tabs, .page-user-login .tabs, .page-user-password .tabs {
+     display:none;
+ }
+ #article-node-form .form-actions {
+        text-align: center;
+    }
+ #article-node-form .form-text {
+        width: 90%;
+    }
+  #article-node-form .field-name-field-image .fieldset-wrapper {
+      width: 265px;
+  }
+  .nice-imagefield-form {
+      width: 90% !important;
+  }
+  .field-name-field-post-sources .description {
+      display: none;
+  }
+  .link-field-column {
+      float: none;
+      width: 100%;
+  }
+  #block-system-main #search-form input#edit-keys {
+      width: 63%;
+  }
+}
+
+@media screen and (min-width: 321px) {
+ #user-register-form, #user-login, #user-pass, #user-profile-form {
+     text-align: center;
+ }
+ #user-register-form input.form-text, #user-register-form textarea.form-textarea, #user-register-form select.form-select, #user-register-form .grippie, #user-login input.form-text, #user-pass input.form-text,
+ #user-profile-form input.form-text, #user-profile-form textarea.form-textarea, #user-profile-form select.form-select, #user-profile-form .grippie {
+     width: 90%;
+     margin-left: auto;
+     margin-right: auto;
+     max-width: 300px;
+ } 
+ #user-profile-form fieldset {
+     width: 90%;
+     margin-left: auto;
+     margin-right: auto;
+     max-width: 400px;
+ }
+ .confirm-parent, .password-parent {
+     width: 100%;
+ }
+ .password-strength {
+     display: none;
+ }
+ .password-confirm {
+     display: none;
+ }
+ #edit-pass-pass2 {
+     display: block;
+ }
+ .form-item-pass .description {
+     display: none !important;
+ }
+ #user-login .form-item-pass .description {
+     display: block !important;
+ }
+ .page-user-register .tabs {
+     display:none;
+ }
+ .page-user-login ul.tabs, .not-logged-in.page-user ul.tabs, .page-user-password ul.tabs {
+    text-align: center;
+    width: 407px;
+    margin: 0 auto;
+ }
+   #block-system-main #search-form input#edit-keys {
+      width: 60%;
+      max-width: 500px;
+  }
+}
+@media screen and (min-width: 321px) and (max-width: 479px) {
+    .page-user-login .tabs, .not-logged-in.page-user .tabs, .page-user-password .tabs {
+        display: none;
+    }
+     #article-node-form .form-actions {
+        text-align: center;
+    }
+    #article-node-form .form-text {
+        width: 90%;
+    }
+     #article-node-form .field-name-field-image .fieldset-wrapper {
+      width: 265px;
+  }
+  .nice-imagefield-form {
+      width: 90% !important;
+  }
+  .field-name-field-post-sources .description {
+      display: none;
+  }
+  .link-field-column {
+      float: none;
+      width: 100%;
+  }
+}
+
+@media screen and (min-width: 480px) and (max-width: 639px) {
+    #article-node-form .form-actions {
+        text-align: center;
+    }
+    #article-node-form .form-text {
+        width: 90%;
+    }
+     #article-node-form .field-name-field-image .fieldset-wrapper {
+      width: 95%;
+  }
+  .nice-imagefield-form {
+      width: 90% !important;
+  }
+  .field-name-field-post-sources .description {
+      display: none;
+  }
+  .link-field-column {
+      float: none;
+      width: 100%;
+  }
+}
+@media screen and (min-width: 640px) and (max-width: 1023px) {
+     #article-node-form .form-actions {
+        text-align: center;
+    }
+    #article-node-form .form-text {
+        width: 90%;
+    }
+     #article-node-form .field-name-field-image .fieldset-wrapper {
+      width: 90%;
+  }
+  .nice-imagefield-form {
+      width: 90% !important;
+  }
+  .field-name-field-post-sources .description {
+      display: none;
+  }
+}
+@media screen and (min-width: 640px) and (max-width: 799px) {
+.link-field-column {
+      float: none;
+      width: 100%;
+  }
+}
+@media screen and (min-width: 360px) {
+#contact-personal-form {
+    margin: 30px auto;
+    border: 1px solid #ccc;
+    box-shadow: 0px 0px 8px #ccc;
+    padding: 15px 10px 0px 20px;
+    max-width: 400px;
+    border-radius: 10px;
+}
+#user-profile-form, #user-register-form, #user-login, #user-pass {
+max-width: 500px;
+margin: 30px auto;
+border: 1px solid #ccc;
+box-shadow: 0px 0px 8px #ccc;
+border-radius: 10px;
+padding: 20px 20px 0px 20px;
+}
+}
