@@ -23,7 +23,7 @@ tooling:
   db-import:
     service: database
     description: Import the database dump
-    cmd: mysql -u root juliush761 < /app/juliush761_mysql_db.sql
+    cmd: mysql -u root juliush761 < /app/database/juliush761_mysql_db.sql
   
   db-export:
     service: database  

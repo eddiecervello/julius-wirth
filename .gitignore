@@ -85,8 +85,5 @@ cache/
 adminer.php
 info.php
 
-# Specific to this project
-d7_source_for_migration.sql
-juliush761_mysql_db.sql
-SETUP_REPORT.md
-activeContext.md 
+# Database directory (place SQL dumps here)
+database/

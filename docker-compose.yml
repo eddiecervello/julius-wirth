@@ -27,7 +27,7 @@ services:
       - "3306:3306"
     volumes:
       - drupal_db:/var/lib/mysql
-      - ./juliush761_mysql_db.sql:/docker-entrypoint-initdb.d/dump.sql:ro
+      - ./database/juliush761_mysql_db.sql:/docker-entrypoint-initdb.d/dump.sql:ro
     environment:
       MYSQL_DATABASE: juliush761
       MYSQL_USER: drupal7
