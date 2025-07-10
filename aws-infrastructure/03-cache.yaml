@@ -53,7 +53,7 @@ Resources:
   CacheParameterGroup:
     Type: AWS::ElastiCache::ParameterGroup
     Properties:
-      CacheParameterGroupFamily: redis7.x
+      CacheParameterGroupFamily: redis6.x
       Description: Parameter group for Julius Wirth Redis
       Properties:
         maxmemory-policy: allkeys-lru
@@ -66,7 +66,7 @@ Resources:
     Properties:
       ClusterName: !Sub '${ProjectName}-redis-${Environment}'
       Engine: redis
-      EngineVersion: '7.0'
+      EngineVersion: '6.2'
       CacheNodeType: !Ref CacheNodeType
       NumCacheNodes: !Ref NumCacheNodes
       Port: 6379
