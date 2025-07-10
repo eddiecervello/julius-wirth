@@ -16,7 +16,7 @@ Parameters:
   AlertEmail:
     Type: String
     Description: Email address for alert notifications
-    Default: 'admin@julius-wirth.com'
+    Default: 'ecervello@hu-friedy.com'
 
 Resources:
   # SNS Topic for Critical Alerts

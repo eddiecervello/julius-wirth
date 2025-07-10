@@ -441,7 +441,7 @@ Resources:
       Name: !Sub '/${ProjectName}/${Environment}/database/password'
       Type: SecureString
       Description: Database password for Julius Wirth
-      Value: !Sub '${ProjectName}SecurePassword123!'  # Change this in production
+      Value: !Sub '${ProjectName}SecurePassword123!'  # Change this in production - notify ecervello@hu-friedy.com
       Tags:
         Project: !Ref ProjectName
         Environment: !Ref Environment
@@ -463,7 +463,7 @@ Resources:
       Name: !Sub '/${ProjectName}/${Environment}/redis/password'
       Type: SecureString
       Description: Redis password for Julius Wirth
-      Value: !Sub '${ProjectName}RedisPassword123!'  # Change this in production
+      Value: !Sub '${ProjectName}RedisPassword123!'  # Change this in production - notify ecervello@hu-friedy.com
       Tags:
         Project: !Ref ProjectName
         Environment: !Ref Environment

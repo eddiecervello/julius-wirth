@@ -24,6 +24,40 @@ Parameters:
     Default: ''
 
 Resources:
+  # Security Headers Response Policy
+  SecurityHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub '${ProjectName}-security-headers-${Environment}'
+        Comment: Security headers for Julius Wirth
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Preload: true
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: SAMEORIGIN
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+          XSSProtection:
+            ModeBlock: true
+            Protection: true
+            Override: true
+        CustomHeadersConfig:
+          Items:
+            - Header: Permissions-Policy
+              Value: "geolocation=(), microphone=(), camera=()"
+              Override: true
+            - Header: Content-Security-Policy
+              Value: "default-src 'self' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; font-src 'self' https: data:;"
+              Override: true
+
   # CloudFront Distribution
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
@@ -64,6 +98,7 @@ Resources:
           ViewerProtocolPolicy: redirect-to-https
           CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
           OriginRequestPolicyId: 88a5eaf4-2fd4-4709-b370-b4c650ea3fcf  # CORS-S3Origin
+          ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
           Compress: true
           AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
           CachedMethods: [GET, HEAD, OPTIONS]
@@ -75,6 +110,7 @@ Resources:
             TargetOriginId: S3Origin
             ViewerProtocolPolicy: redirect-to-https
             CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+            ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
             Compress: true
             AllowedMethods: [GET, HEAD, OPTIONS]
             CachedMethods: [GET, HEAD, OPTIONS]
@@ -84,6 +120,7 @@ Resources:
             TargetOriginId: ALBOrigin
             ViewerProtocolPolicy: redirect-to-https
             CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+            ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
             Compress: true
             AllowedMethods: [GET, HEAD]
             CachedMethods: [GET, HEAD]
@@ -92,6 +129,7 @@ Resources:
             TargetOriginId: ALBOrigin
             ViewerProtocolPolicy: redirect-to-https
             CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+            ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
             Compress: true
             AllowedMethods: [GET, HEAD]
             CachedMethods: [GET, HEAD]
@@ -101,6 +139,7 @@ Resources:
             TargetOriginId: ALBOrigin
             ViewerProtocolPolicy: redirect-to-https
             CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+            ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
             Compress: true
             AllowedMethods: [GET, HEAD]
             CachedMethods: [GET, HEAD]
@@ -109,6 +148,7 @@ Resources:
             TargetOriginId: ALBOrigin
             ViewerProtocolPolicy: redirect-to-https
             CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+            ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
             Compress: true
             AllowedMethods: [GET, HEAD]
             CachedMethods: [GET, HEAD]
@@ -117,6 +157,7 @@ Resources:
             TargetOriginId: ALBOrigin
             ViewerProtocolPolicy: redirect-to-https
             CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+            ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
             Compress: true
             AllowedMethods: [GET, HEAD]
             CachedMethods: [GET, HEAD]
