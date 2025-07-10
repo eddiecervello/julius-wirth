@@ -1,0 +1,318 @@
+name: Deploy to AWS Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT_NAME: julius-wirth
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '7.4'
+          extensions: mbstring, xml, gd, curl, json, mysqli, redis
+          coverage: none
+
+      - name: Validate composer.json
+        run: |
+          if [ -f composer.json ]; then
+            composer validate --strict
+          fi
+
+      - name: PHP Syntax Check
+        run: |
+          find . -name "*.php" -not -path "./vendor/*" -not -path "./node_modules/*" | xargs -n1 php -l
+
+      - name: Check Drupal Coding Standards
+        run: |
+          # Install PHP_CodeSniffer
+          composer global require squizlabs/php_codesniffer
+          composer global require drupal/coder
+          
+          # Run coding standards check
+          ~/.composer/vendor/bin/phpcs \
+            --standard=Drupal \
+            --extensions=php,module,inc,install,test,profile,theme \
+            --ignore=*/vendor/*,*/node_modules/* \
+            sites/all/modules/custom sites/all/themes/bartik1 || true
+
+      - name: Security Audit
+        run: |
+          # Check for known vulnerabilities
+          if [ -f composer.lock ]; then
+            composer audit
+          fi
+
+  build:
+    name: Build Deployment Package
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+
+      - name: Optimize assets
+        run: |
+          # Optimize images
+          find custom -name "*.jpg" -o -name "*.jpeg" | xargs -I {} jpegoptim --strip-all {}
+          find custom -name "*.png" | xargs -I {} optipng -o2 {}
+
+      - name: Create deployment package
+        run: |
+          # Create deployment directory
+          mkdir -p deployment-package
+          
+          # Copy files excluding development items
+          rsync -av \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.lando.yml' \
+            --exclude='docker-compose.yml' \
+            --exclude='Dockerfile' \
+            --exclude='sites/default/files/*' \
+            --exclude='sites/default/settings.local.php' \
+            --exclude='*.sql' \
+            --exclude='database' \
+            --exclude='deployment' \
+            --exclude='tests' \
+            . deployment-package/
+          
+          # Copy production settings
+          cp sites/default/settings.prod.php deployment-package/sites/default/settings.php
+          
+          # Create archive
+          tar -czf deployment-${{ github.sha }}.tar.gz -C deployment-package .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: deployment-package
+          path: deployment-${{ github.sha }}.tar.gz
+          retention-days: 7
+
+  deploy:
+    name: Deploy to AWS
+    needs: build
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    steps:
+      - name: Download deployment package
+        uses: actions/download-artifact@v3
+        with:
+          name: deployment-package
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload to S3
+        run: |
+          # Upload deployment package
+          aws s3 cp deployment-${{ github.sha }}.tar.gz \
+            s3://${{ env.PROJECT_NAME }}-deployments/
+          
+          # Update latest pointer
+          echo "deployment-${{ github.sha }}.tar.gz" > latest.txt
+          aws s3 cp latest.txt s3://${{ env.PROJECT_NAME }}-deployments/
+
+      - name: Update Launch Template
+        run: |
+          # Create new launch template version with updated deployment
+          aws ec2 create-launch-template-version \
+            --launch-template-name ${{ env.PROJECT_NAME }}-lt \
+            --source-version '$Latest' \
+            --launch-template-data "{
+              \"UserData\": \"$(base64 -w 0 << 'EOF'
+#!/bin/bash
+# Download and extract latest deployment
+aws s3 cp s3://${{ env.PROJECT_NAME }}-deployments/deployment-${{ github.sha }}.tar.gz /tmp/
+cd /var/www/html
+tar -xzf /tmp/deployment-${{ github.sha }}.tar.gz
+chown -R apache:apache /var/www/html
+systemctl restart httpd
+EOF
+              )\"
+            }"
+
+      - name: Start deployment
+        id: deployment
+        run: |
+          # Start instance refresh
+          REFRESH_ID=$(aws autoscaling start-instance-refresh \
+            --auto-scaling-group-name ${{ env.PROJECT_NAME }}-asg \
+            --preferences MinHealthyPercentage=90,InstanceWarmup=300 \
+            --query 'InstanceRefreshId' \
+            --output text)
+          
+          echo "refresh_id=$REFRESH_ID" >> $GITHUB_OUTPUT
+
+      - name: Monitor deployment
+        run: |
+          # Monitor instance refresh
+          REFRESH_ID="${{ steps.deployment.outputs.refresh_id }}"
+          STATUS="Pending"
+          
+          while [[ "$STATUS" == "Pending" || "$STATUS" == "InProgress" ]]; do
+            sleep 30
+            STATUS=$(aws autoscaling describe-instance-refreshes \
+              --auto-scaling-group-name ${{ env.PROJECT_NAME }}-asg \
+              --instance-refresh-ids "$REFRESH_ID" \
+              --query 'InstanceRefreshes[0].Status' \
+              --output text)
+            
+            PERCENTAGE=$(aws autoscaling describe-instance-refreshes \
+              --auto-scaling-group-name ${{ env.PROJECT_NAME }}-asg \
+              --instance-refresh-ids "$REFRESH_ID" \
+              --query 'InstanceRefreshes[0].PercentageComplete' \
+              --output text)
+            
+            echo "Status: $STATUS - Progress: ${PERCENTAGE}%"
+          done
+          
+          if [[ "$STATUS" != "Successful" ]]; then
+            echo "Deployment failed with status: $STATUS"
+            exit 1
+          fi
+
+      - name: Run post-deployment tasks
+        run: |
+          # Get one instance for running commands
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=${{ env.PROJECT_NAME }}-web" \
+                     "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].InstanceId' \
+            --output text)
+          
+          # Run Drupal updates
+          aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=[
+              "cd /var/www/html && drush updatedb -y",
+              "cd /var/www/html && drush cc all"
+            ]'
+
+      - name: Clear CDN cache
+        run: |
+          # Get CloudFront distribution
+          DISTRIBUTION_ID=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?Comment=='${{ env.PROJECT_NAME }} CDN'].Id" \
+            --output text)
+          
+          if [[ -n "$DISTRIBUTION_ID" && "$DISTRIBUTION_ID" != "None" ]]; then
+            aws cloudfront create-invalidation \
+              --distribution-id "$DISTRIBUTION_ID" \
+              --paths "/*"
+          fi
+
+      - name: Notify deployment status
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: |
+            Deployment to ${{ github.event.inputs.environment || 'production' }} ${{ job.status }}
+            Commit: ${{ github.sha }}
+            Author: ${{ github.actor }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+  smoke-test:
+    name: Run Smoke Tests
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check site availability
+        run: |
+          # Wait for site to be fully deployed
+          sleep 60
+          
+          # Check home page
+          response=$(curl -s -o /dev/null -w "%{http_code}" https://www.julius-wirth.com)
+          if [ $response -ne 200 ]; then
+            echo "Site returned HTTP $response"
+            exit 1
+          fi
+          
+          # Check critical pages
+          for path in "/user" "/contact" "/products"; do
+            response=$(curl -s -o /dev/null -w "%{http_code}" https://www.julius-wirth.com$path)
+            if [ $response -ne 200 ]; then
+              echo "Path $path returned HTTP $response"
+              exit 1
+            fi
+          done
+
+      - name: Performance check
+        run: |
+          # Simple performance check
+          time=$(curl -s -w "%{time_total}" -o /dev/null https://www.julius-wirth.com)
+          if (( $(echo "$time > 3" | bc -l) )); then
+            echo "Page load time too high: ${time}s"
+            exit 1
+          fi
+          echo "Page load time: ${time}s"
+
+  rollback:
+    name: Rollback Deployment
+    needs: [deploy, smoke-test]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Rollback to previous version
+        run: |
+          # Cancel current refresh if still running
+          aws autoscaling cancel-instance-refresh \
+            --auto-scaling-group-name ${{ env.PROJECT_NAME }}-asg || true
+          
+          # Start new refresh with previous template version
+          aws autoscaling start-instance-refresh \
+            --auto-scaling-group-name ${{ env.PROJECT_NAME }}-asg \
+            --preferences MinHealthyPercentage=90,InstanceWarmup=300 \
+            --desired-configuration "{\"LaunchTemplate\":{\"LaunchTemplateName\":\"${{ env.PROJECT_NAME }}-lt\",\"Version\":\"\$Default\"}}"
+
+      - name: Notify rollback
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              text: "Deployment rollback initiated for ${{ github.event.inputs.environment || 'production' }}",
+              color: "danger"
+            }
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}

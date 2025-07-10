@@ -1,37 +1,60 @@
-# Drupal 7 .gitignore
+# Drupal 7 Production .gitignore
+# Comprehensive ignore patterns for enterprise deployment
 
-# Core Drupal files
-sites/*/files/
-sites/*/private/
-
-# Configuration files with sensitive data
+# Protected configuration files
 sites/*/settings.local.php
-sites/*/settings.php
-sites/*/services.yml
-sites/*/local.services.yml
+sites/*/settings.*.php
+!sites/*/settings.php
+!sites/example.settings.local.php
+sites/*/services*.yml
+!sites/default/default.services.yml
+
+# User-generated content
+sites/*/files
+sites/*/private
+files/
 
 # Database dumps and backups
 *.sql
 *.sql.gz
 *.sql.bz2
+*.mysql
+*.dump
 backup_*.tar.gz
 backup_*.sql
+database/*.sql
+!database/juliush761.sql
+!database/schema.sql
 
-# Lando local configuration
+# Environment and secrets
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+*.crt
+
+# Development configurations
 .lando.local.yml
 .lando/
-
-# Docker files
 docker-compose.override.yml
-.env
-.env.local
+docker-compose.*.yml
+!docker-compose.prod.yml
 
 # IDE and editor files
 .vscode/
 .idea/
+*.sublime-project
+*.sublime-workspace
+.project
+.buildpath
+.settings/
+nbproject/
 *.swp
 *.swo
 *~
+*.orig
 
 # OS generated files
 .DS_Store
@@ -41,49 +64,77 @@ docker-compose.override.yml
 .Trashes
 ehthumbs.db
 Thumbs.db
+desktop.ini
 
-# Temporary files
+# Temporary and cache files
 *.tmp
 *.temp
 *.log
 *.cache
+error_log
+access_log
+tmp/
+temp/
+cache/
 
-# Node.js dependencies (if any)
+# Build artifacts
 node_modules/
+bower_components/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-
-# Composer dependencies
 vendor/
+dist/
+build/
 
-# Drupal specific ignores
-sites/all/modules/contrib/
-sites/all/themes/contrib/
-sites/all/libraries/
-
-# Files directory
-sites/default/files/
-sites/default/private/
-
-# Drupal multisite
-sites/*/files/
-sites/*/private/
-
-# Drupal configuration
-sites/*/settings.php
-sites/*/settings.local.php
-
-# Drupal file permissions
-sites/default/default.settings.php
-
-# Drupal cache
-cache/
+# Documentation files (cleaned for production)
+/CHANGELOG.txt
+/COPYRIGHT.txt
+/INSTALL*.txt
+/MAINTAINERS.txt
+/UPGRADE.txt
+/README.txt
+PATCHES.txt
 
 # Development tools
 .htpasswd
 adminer.php
 info.php
+phpinfo.php
+test.php
 
-# Database directory (place SQL dumps here)
-database/
+# Testing
+tests/results/
+coverage/
+*.test
+simpletest/
+
+# Compiled files
+*.css.map
+*.js.map
+*.sass-cache/
+
+# Drupal module/theme development
+sites/all/modules/custom/*/node_modules/
+sites/all/themes/custom/*/node_modules/
+sites/all/modules/README.txt
+sites/all/themes/README.txt
+
+# Security scanning results
+security-scan-results/
+vulnerability-reports/
+
+# AWS specific
+.aws/
+aws-exports.js
+
+# Terraform state (if using IaC)
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Backup files
+*.bak
+*.backup
+*.old
+~*
