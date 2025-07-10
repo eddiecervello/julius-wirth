@@ -1,0 +1,657 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Julius Wirth Deployment Pipeline - Automated CI/CD Infrastructure'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'production'
+    AllowedValues: ['development', 'staging', 'production']
+    Description: Environment name
+  
+  ProjectName:
+    Type: String
+    Default: 'julius-wirth'
+    Description: Project name for resource tagging
+
+  GitHubRepository:
+    Type: String
+    Default: 'your-org/julius-wirth'
+    Description: GitHub repository in format owner/repo
+
+  GitHubBranch:
+    Type: String
+    Default: 'main'
+    Description: GitHub branch to deploy from
+
+Resources:
+  # CodeBuild Project for Application Build
+  ApplicationBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${ProjectName}-build-${Environment}'
+      Description: Build project for Julius Wirth application
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        PrivilegedMode: false
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: PROJECT_NAME
+            Value: !Ref ProjectName
+          - Name: ENVIRONMENT
+            Value: !Ref Environment
+          - Name: DEPLOYMENTS_BUCKET
+            Value: 
+              Fn::ImportValue: !Sub '${ProjectName}-deployments-bucket-${Environment}'
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo Logging in to Amazon ECR...
+                - aws --version
+                - echo Build started on `date`
+                - echo Installing dependencies...
+            build:
+              commands:
+                - echo Build phase started on `date`
+                - echo Creating deployment package...
+                # Remove development files and prepare production package
+                - rm -rf .git .github .gitignore .lando.yml docker-compose.yml
+                - rm -rf sites/default/files/tmp/* || true
+                - rm -rf sites/default/settings.local.php || true
+                # Set proper permissions
+                - find . -type f -exec chmod 644 {} \;
+                - find . -type d -exec chmod 755 {} \;
+                - chmod 755 sites/default
+                - chmod 644 sites/default/settings.php
+                # Create deployment archive
+                - tar -czf /tmp/julius-wirth-${CODEBUILD_BUILD_NUMBER}.tar.gz .
+                - echo Build completed on `date`
+            post_build:
+              commands:
+                - echo Post-build phase started on `date`
+                # Upload to S3 deployments bucket
+                - aws s3 cp /tmp/julius-wirth-${CODEBUILD_BUILD_NUMBER}.tar.gz s3://${DEPLOYMENTS_BUCKET}/builds/
+                - aws s3 cp /tmp/julius-wirth-${CODEBUILD_BUILD_NUMBER}.tar.gz s3://${DEPLOYMENTS_BUCKET}/latest.tar.gz
+                - echo Deployment package uploaded to S3
+          artifacts:
+            files:
+              - '**/*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-build-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # CodeBuild Project for Database Migrations
+  DatabaseMigrationProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${ProjectName}-db-migration-${Environment}'
+      Description: Database migration project for Julius Wirth
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        PrivilegedMode: false
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: PROJECT_NAME
+            Value: !Ref ProjectName
+          - Name: ENVIRONMENT
+            Value: !Ref Environment
+          - Name: DB_HOST
+            Value: 
+              Fn::ImportValue: !Sub '${ProjectName}-db-endpoint-${Environment}'
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo Database migration started on `date`
+                - yum update -y
+                - yum install -y mysql
+                # Get database credentials from Parameter Store
+                - export DB_USER=$(aws ssm get-parameter --name "/${PROJECT_NAME}/${ENVIRONMENT}/database/username" --query "Parameter.Value" --output text)
+                - export DB_PASS=$(aws ssm get-parameter --name "/${PROJECT_NAME}/${ENVIRONMENT}/database/password" --with-decryption --query "Parameter.Value" --output text)
+            build:
+              commands:
+                - echo Running database updates...
+                # Test database connection
+                - mysql -h $DB_HOST -u $DB_USER -p$DB_PASS -e "SELECT 1"
+                # Run Drupal database updates (would be customized based on actual needs)
+                - echo "Database migration placeholder - implement based on Drupal requirements"
+                # Example: Run specific SQL scripts if needed
+                # - mysql -h $DB_HOST -u $DB_USER -p$DB_PASS juliuswirth < database/updates.sql
+            post_build:
+              commands:
+                - echo Database migration completed on `date`
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-db-migration-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # CodePipeline for Automated Deployment
+  DeploymentPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub '${ProjectName}-pipeline-${Environment}'
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref PipelineArtifactsBucket
+      Stages:
+        # Source Stage
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: '1'
+              Configuration:
+                Owner: !Select [0, !Split ['/', !Ref GitHubRepository]]
+                Repo: !Select [1, !Split ['/', !Ref GitHubRepository]]
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubToken
+                PollForSourceChanges: false
+              OutputArtifacts:
+                - Name: SourceOutput
+
+        # Build Stage
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref ApplicationBuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+
+        # Deploy Stage
+        - Name: Deploy
+          Actions:
+            # Database Migration
+            - Name: DatabaseMigration
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref DatabaseMigrationProject
+              InputArtifacts:
+                - Name: SourceOutput
+              RunOrder: 1
+            
+            # Application Deployment
+            - Name: ApplicationDeployment
+              ActionTypeId:
+                Category: Invoke
+                Owner: AWS
+                Provider: Lambda
+                Version: '1'
+              Configuration:
+                FunctionName: !Ref DeploymentFunction
+              InputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 2
+
+        # Post-Deploy Stage
+        - Name: PostDeploy
+          Actions:
+            - Name: HealthCheck
+              ActionTypeId:
+                Category: Invoke
+                Owner: AWS
+                Provider: Lambda
+                Version: '1'
+              Configuration:
+                FunctionName: !Ref HealthCheckFunction
+              RunOrder: 1
+            
+            - Name: CacheClear
+              ActionTypeId:
+                Category: Invoke
+                Owner: AWS
+                Provider: Lambda
+                Version: '1'
+              Configuration:
+                FunctionName: !Ref CacheClearFunction
+              RunOrder: 2
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-pipeline-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # S3 Bucket for Pipeline Artifacts
+  PipelineArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-pipeline-artifacts-${Environment}-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-pipeline-artifacts-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Lambda Function for Application Deployment
+  DeploymentFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-deployment-${Environment}'
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt DeploymentLambdaRole.Arn
+      Timeout: 300
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import time
+          
+          autoscaling = boto3.client('autoscaling')
+          codepipeline = boto3.client('codepipeline')
+          
+          def lambda_handler(event, context):
+              """
+              Deploy application to Auto Scaling Group using Instance Refresh
+              """
+              try:
+                  job_id = event['CodePipeline.job']['id']
+                  
+                  # Get Auto Scaling Group name from environment
+                  asg_name = f"{context.project_name}-asg-{context.environment}"
+                  
+                  # Start instance refresh for blue-green deployment
+                  response = autoscaling.start_instance_refresh(
+                      AutoScalingGroupName=asg_name,
+                      Strategy='Rolling',
+                      DesiredConfiguration={
+                          'LaunchTemplate': {
+                              'Version': '$Latest'
+                          }
+                      },
+                      Preferences={
+                          'InstanceWarmup': 300,
+                          'MinHealthyPercentage': 50,
+                          'CheckpointPercentages': [50],
+                          'CheckpointDelay': 300
+                      }
+                  )
+                  
+                  print(f"Started instance refresh: {response['InstanceRefreshId']}")
+                  
+                  # Monitor the refresh (simplified - in practice, would use separate monitoring)
+                  time.sleep(30)  # Initial wait
+                  
+                  # Signal success to CodePipeline
+                  codepipeline.put_job_success_result(jobId=job_id)
+                  
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps({
+                          'message': 'Deployment initiated successfully',
+                          'instanceRefreshId': response['InstanceRefreshId']
+                      })
+                  }
+                  
+              except Exception as e:
+                  print(f"Deployment failed: {str(e)}")
+                  codepipeline.put_job_failure_result(
+                      jobId=job_id,
+                      failureDetails={'message': str(e), 'type': 'JobFailed'}
+                  )
+                  raise
+      Environment:
+        Variables:
+          PROJECT_NAME: !Ref ProjectName
+          ENVIRONMENT: !Ref Environment
+          ASG_NAME: 
+            Fn::ImportValue: !Sub '${ProjectName}-asg-name-${Environment}'
+
+  # Lambda Function for Health Check
+  HealthCheckFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-health-check-${Environment}'
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt DeploymentLambdaRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import requests
+          import time
+          
+          codepipeline = boto3.client('codepipeline')
+          
+          def lambda_handler(event, context):
+              """
+              Perform health check after deployment
+              """
+              try:
+                  job_id = event['CodePipeline.job']['id']
+                  
+                  # Get ALB DNS name
+                  alb_dns = context.alb_dns
+                  
+                  # Perform health checks
+                  max_attempts = 10
+                  for attempt in range(max_attempts):
+                      try:
+                          response = requests.get(f'http://{alb_dns}', timeout=10)
+                          if response.status_code == 200:
+                              print(f"Health check passed on attempt {attempt + 1}")
+                              break
+                      except requests.exceptions.RequestException as e:
+                          print(f"Health check attempt {attempt + 1} failed: {e}")
+                      
+                      if attempt == max_attempts - 1:
+                          raise Exception("Health check failed after maximum attempts")
+                      
+                      time.sleep(30)  # Wait before retry
+                  
+                  # Signal success to CodePipeline
+                  codepipeline.put_job_success_result(jobId=job_id)
+                  
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps('Health check passed')
+                  }
+                  
+              except Exception as e:
+                  print(f"Health check failed: {str(e)}")
+                  codepipeline.put_job_failure_result(
+                      jobId=job_id,
+                      failureDetails={'message': str(e), 'type': 'JobFailed'}
+                  )
+                  raise
+      Environment:
+        Variables:
+          ALB_DNS: 
+            Fn::ImportValue: !Sub '${ProjectName}-alb-dns-${Environment}'
+
+  # Lambda Function for Cache Clearing
+  CacheClearFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-cache-clear-${Environment}'
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt DeploymentLambdaRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import redis
+          
+          cloudfront = boto3.client('cloudfront')
+          codepipeline = boto3.client('codepipeline')
+          
+          def lambda_handler(event, context):
+              """
+              Clear caches after deployment
+              """
+              try:
+                  job_id = event['CodePipeline.job']['id']
+                  
+                  # Clear CloudFront cache
+                  distribution_id = context.cdn_id
+                  if distribution_id:
+                      invalidation = cloudfront.create_invalidation(
+                          DistributionId=distribution_id,
+                          InvalidationBatch={
+                              'Paths': {
+                                  'Quantity': 1,
+                                  'Items': ['/*']
+                              },
+                              'CallerReference': str(int(time.time()))
+                          }
+                      )
+                      print(f"CloudFront invalidation created: {invalidation['Invalidation']['Id']}")
+                  
+                  # Clear Redis cache
+                  redis_host = context.redis_host
+                  if redis_host:
+                      try:
+                          r = redis.Redis(host=redis_host, port=6379, decode_responses=True)
+                          r.flushall()
+                          print("Redis cache cleared")
+                      except Exception as e:
+                          print(f"Redis cache clear failed: {e}")
+                          # Don't fail the pipeline for Redis issues
+                  
+                  # Signal success to CodePipeline
+                  codepipeline.put_job_success_result(jobId=job_id)
+                  
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps('Cache clearing completed')
+                  }
+                  
+              except Exception as e:
+                  print(f"Cache clearing failed: {str(e)}")
+                  codepipeline.put_job_failure_result(
+                      jobId=job_id,
+                      failureDetails={'message': str(e), 'type': 'JobFailed'}
+                  )
+                  raise
+      Environment:
+        Variables:
+          CDN_ID: 
+            Fn::ImportValue: !Sub '${ProjectName}-cdn-id-${Environment}'
+          REDIS_HOST: 
+            Fn::ImportValue: !Sub '${ProjectName}-redis-endpoint-${Environment}'
+
+  # IAM Role for CodeBuild
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ProjectName}*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub '${PipelineArtifactsBucket}/*'
+                  - Fn::Sub:
+                      - '${BucketArn}/*'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-deployments-bucket-${Environment}'
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/*'
+
+  # IAM Role for CodePipeline
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodePipelinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketVersioning
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource:
+                  - !Sub '${PipelineArtifactsBucket}'
+                  - !Sub '${PipelineArtifactsBucket}/*'
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource:
+                  - !GetAtt ApplicationBuildProject.Arn
+                  - !GetAtt DatabaseMigrationProject.Arn
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt DeploymentFunction.Arn
+                  - !GetAtt HealthCheckFunction.Arn
+                  - !GetAtt CacheClearFunction.Arn
+
+  # IAM Role for Deployment Lambda Functions
+  DeploymentLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DeploymentLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - autoscaling:StartInstanceRefresh
+                  - autoscaling:DescribeInstanceRefreshes
+                  - autoscaling:DescribeAutoScalingGroups
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                  - cloudfront:GetInvalidation
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - codepipeline:PutJobSuccessResult
+                  - codepipeline:PutJobFailureResult
+                Resource: '*'
+
+  # GitHub Webhook for Pipeline Triggering
+  GitHubWebhook:
+    Type: AWS::CodePipeline::Webhook
+    Properties:
+      Authentication: GITHUB_HMAC
+      AuthenticationConfiguration:
+        SecretToken: !Ref GitHubToken
+      Filters:
+        - JsonPath: '$.ref'
+          MatchEquals: !Sub 'refs/heads/${GitHubBranch}'
+      TargetPipeline: !Ref DeploymentPipeline
+      TargetAction: SourceAction
+      TargetPipelineVersion: !GetAtt DeploymentPipeline.Version
+      RegisterWithThirdParty: true
+
+# Additional Parameters
+Parameters:
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub personal access token for webhook access
+
+Outputs:
+  PipelineName:
+    Description: CodePipeline name
+    Value: !Ref DeploymentPipeline
+    Export:
+      Name: !Sub '${ProjectName}-pipeline-name-${Environment}'
+
+  PipelineUrl:
+    Description: CodePipeline URL
+    Value: !Sub 'https://console.aws.amazon.com/codesuite/codepipeline/pipelines/${DeploymentPipeline}/view'
+    Export:
+      Name: !Sub '${ProjectName}-pipeline-url-${Environment}'
+
+  BuildProjectName:
+    Description: CodeBuild project name
+    Value: !Ref ApplicationBuildProject
+    Export:
+      Name: !Sub '${ProjectName}-build-project-${Environment}'
+
+  ArtifactsBucketName:
+    Description: Pipeline artifacts bucket name
+    Value: !Ref PipelineArtifactsBucket
+    Export:
+      Name: !Sub '${ProjectName}-artifacts-bucket-${Environment}'

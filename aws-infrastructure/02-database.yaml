@@ -1,0 +1,256 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Julius Wirth RDS MySQL Database Infrastructure'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'production'
+    AllowedValues: ['development', 'staging', 'production']
+    Description: Environment name
+  
+  ProjectName:
+    Type: String
+    Default: 'julius-wirth'
+    Description: Project name for resource tagging
+
+  DBInstanceClass:
+    Type: String
+    Default: 'db.t3.micro'
+    AllowedValues: ['db.t3.micro', 'db.t3.small', 'db.t3.medium']
+    Description: RDS instance class
+
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 100
+    Description: Database allocated storage in GB
+
+  DBUsername:
+    Type: String
+    Default: 'juliuswirth'
+    Description: Database master username
+    NoEcho: true
+
+  DBPassword:
+    Type: String
+    MinLength: 8
+    MaxLength: 128
+    NoEcho: true
+    Description: Database master password (min 8 characters)
+
+  BackupRetentionPeriod:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 35
+    Description: Number of days to retain backups
+
+Resources:
+  # Security Group for RDS
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Julius Wirth RDS instance
+      VpcId: 
+        Fn::ImportValue: !Sub '${ProjectName}-vpc-id-${Environment}'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref WebServerSecurityGroup
+          Description: Allow MySQL access from web servers
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-db-sg-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Security Group for Web Servers (to reference in DB security group)
+  WebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Julius Wirth web servers
+      VpcId: 
+        Fn::ImportValue: !Sub '${ProjectName}-vpc-id-${Environment}'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-web-sg-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # RDS Parameter Group for MySQL optimization
+  DBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: Parameter group for Julius Wirth MySQL
+      Family: mysql5.7
+      Parameters:
+        innodb_buffer_pool_size: '{DBInstanceClassMemory*3/4}'
+        max_connections: 100
+        slow_query_log: 1
+        long_query_time: 2
+        log_queries_not_using_indexes: 1
+        innodb_file_per_table: 1
+        character_set_server: utf8mb4
+        collation_server: utf8mb4_unicode_ci
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-db-params-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # RDS Instance
+  DatabaseInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${ProjectName}-mysql-${Environment}'
+      DBInstanceClass: !Ref DBInstanceClass
+      Engine: MySQL
+      EngineVersion: '5.7.44'
+      AllocatedStorage: !Ref DBAllocatedStorage
+      StorageType: gp2
+      StorageEncrypted: true
+      
+      # Database Configuration
+      DBName: juliuswirth
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      
+      # Network Configuration
+      DBSubnetGroupName: 
+        Fn::ImportValue: !Sub '${ProjectName}-db-subnet-group-${Environment}'
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+      
+      # Parameter Group
+      DBParameterGroupName: !Ref DBParameterGroup
+      
+      # Backup Configuration
+      BackupRetentionPeriod: !Ref BackupRetentionPeriod
+      PreferredBackupWindow: '03:00-04:00'
+      PreferredMaintenanceWindow: 'sun:04:00-sun:05:00'
+      
+      # High Availability Configuration
+      MultiAZ: false
+      PubliclyAccessible: false
+      AutoMinorVersionUpgrade: true
+      DeletionProtection: true
+      
+      # Monitoring
+      MonitoringInterval: 60
+      MonitoringRoleArn: !GetAtt RDSEnhancedMonitoringRole.Arn
+      EnablePerformanceInsights: false
+      
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-mysql-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Backup
+          Value: 'Required'
+
+  # IAM Role for RDS Enhanced Monitoring
+  RDSEnhancedMonitoringRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-rds-monitoring-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: monitoring.rds.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole'
+      Path: /
+
+  # CloudWatch Alarms for Database Monitoring
+  DatabaseCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: RDS instance high CPU
+      AlarmActions:
+        - !Ref DatabaseAlarmTopic
+      MetricName: CPUUtilization
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref DatabaseInstance
+
+  DatabaseConnectionAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: RDS instance high connection count
+      AlarmActions:
+        - !Ref DatabaseAlarmTopic
+      MetricName: DatabaseConnections
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref DatabaseInstance
+
+  # SNS Topic for Database Alarms
+  DatabaseAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-db-alarms-${Environment}'
+      DisplayName: Julius Wirth Database Alarms
+
+Outputs:
+  DatabaseEndpoint:
+    Description: RDS instance endpoint
+    Value: !GetAtt DatabaseInstance.Endpoint.Address
+    Export:
+      Name: !Sub '${ProjectName}-db-endpoint-${Environment}'
+
+  DatabasePort:
+    Description: RDS instance port
+    Value: !GetAtt DatabaseInstance.Endpoint.Port
+    Export:
+      Name: !Sub '${ProjectName}-db-port-${Environment}'
+
+  DatabaseName:
+    Description: Database name
+    Value: juliuswirth
+    Export:
+      Name: !Sub '${ProjectName}-db-name-${Environment}'
+
+  WebServerSecurityGroupId:
+    Description: Web server security group ID
+    Value: !Ref WebServerSecurityGroup
+    Export:
+      Name: !Sub '${ProjectName}-web-sg-id-${Environment}'
+
+  DatabaseSecurityGroupId:
+    Description: Database security group ID
+    Value: !Ref DatabaseSecurityGroup
+    Export:
+      Name: !Sub '${ProjectName}-db-sg-id-${Environment}'
+
+  DatabaseAlarmTopicArn:
+    Description: SNS topic for database alarms
+    Value: !Ref DatabaseAlarmTopic
+    Export:
+      Name: !Sub '${ProjectName}-db-alarm-topic-${Environment}'

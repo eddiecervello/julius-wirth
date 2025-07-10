@@ -1,0 +1,577 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Julius Wirth Monitoring and Logging Infrastructure'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'production'
+    AllowedValues: ['development', 'staging', 'production']
+    Description: Environment name
+  
+  ProjectName:
+    Type: String
+    Default: 'julius-wirth'
+    Description: Project name for resource tagging
+
+  AlertEmail:
+    Type: String
+    Description: Email address for alert notifications
+    Default: 'admin@julius-wirth.com'
+
+Resources:
+  # SNS Topic for Critical Alerts
+  CriticalAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-critical-alerts-${Environment}'
+      DisplayName: Julius Wirth Critical Alerts
+      DeliveryPolicy:
+        http:
+          defaultHealthyRetryPolicy:
+            minDelayTarget: 20
+            maxDelayTarget: 20
+            numRetries: 3
+            numMaxDelayRetries: 0
+            numMinDelayRetries: 0
+            numNoDelayRetries: 0
+            backoffFunction: linear
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-critical-alerts-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # SNS Topic for Warning Alerts
+  WarningAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-warning-alerts-${Environment}'
+      DisplayName: Julius Wirth Warning Alerts
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-warning-alerts-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Email Subscription for Critical Alerts
+  CriticalAlertsEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref CriticalAlertsTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # Email Subscription for Warning Alerts
+  WarningAlertsEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref WarningAlertsTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # CloudWatch Dashboard
+  MonitoringDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${ProjectName}-${Environment}-overview'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/ApplicationELB", "RequestCount", "LoadBalancer", "${ProjectName}-alb-${Environment}" ],
+                  [ ".", "ResponseTime", ".", "." ],
+                  [ ".", "HTTPCode_Target_2XX_Count", ".", "." ],
+                  [ ".", "HTTPCode_Target_4XX_Count", ".", "." ],
+                  [ ".", "HTTPCode_Target_5XX_Count", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Application Load Balancer Metrics",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/EC2", "CPUUtilization", "AutoScalingGroupName", "${ProjectName}-asg-${Environment}" ],
+                  [ ".", "NetworkIn", ".", "." ],
+                  [ ".", "NetworkOut", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "EC2 Instance Metrics",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", "${ProjectName}-mysql-${Environment}" ],
+                  [ ".", "DatabaseConnections", ".", "." ],
+                  [ ".", "FreeStorageSpace", ".", "." ],
+                  [ ".", "ReadLatency", ".", "." ],
+                  [ ".", "WriteLatency", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "RDS Database Metrics",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/ElastiCache", "CPUUtilization", "CacheClusterId", "${ProjectName}-redis-${Environment}" ],
+                  [ ".", "CurrConnections", ".", "." ],
+                  [ ".", "CacheHits", ".", "." ],
+                  [ ".", "CacheMisses", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "ElastiCache Redis Metrics",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 12,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/CloudFront", "Requests", "DistributionId", "${ProjectName}-cdn-${Environment}" ],
+                  [ ".", "BytesDownloaded", ".", "." ],
+                  [ ".", "4xxErrorRate", ".", "." ],
+                  [ ".", "5xxErrorRate", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "us-east-1",
+                "title": "CloudFront CDN Metrics",
+                "period": 300
+              }
+            }
+          ]
+        }
+
+  # Composite Alarm for Overall System Health
+  SystemHealthAlarm:
+    Type: AWS::CloudWatch::CompositeAlarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-system-health-${Environment}'
+      AlarmDescription: Overall system health composite alarm
+      AlarmRule: !Sub |
+        (ALARM("${ALBResponseTimeAlarm}") OR 
+         ALARM("${DatabaseCPUAlarm}") OR 
+         ALARM("${EC2HighCPUAlarm}") OR 
+         ALARM("${CacheHighCPUAlarm}"))
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+      OKActions:
+        - !Ref CriticalAlertsTopic
+
+  # Application Load Balancer Alarms
+  ALBResponseTimeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-alb-response-time-${Environment}'
+      AlarmDescription: ALB response time is too high
+      MetricName: ResponseTime
+      Namespace: AWS/ApplicationELB
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5.0
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref WarningAlertsTopic
+      OKActions:
+        - !Ref WarningAlertsTopic
+      Dimensions:
+        - Name: LoadBalancer
+          Value: 
+            Fn::ImportValue: !Sub '${ProjectName}-alb-dns-${Environment}'
+
+  ALBHighErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-alb-error-rate-${Environment}'
+      AlarmDescription: ALB error rate is too high
+      MetricName: HTTPCode_Target_5XX_Count
+      Namespace: AWS/ApplicationELB
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+      Dimensions:
+        - Name: LoadBalancer
+          Value: 
+            Fn::ImportValue: !Sub '${ProjectName}-alb-dns-${Environment}'
+
+  # EC2 Instance Alarms
+  EC2HighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-ec2-high-cpu-${Environment}'
+      AlarmDescription: EC2 instances high CPU utilization
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref WarningAlertsTopic
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: 
+            Fn::ImportValue: !Sub '${ProjectName}-asg-name-${Environment}'
+
+  EC2LowMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-ec2-low-memory-${Environment}'
+      AlarmDescription: EC2 instances low memory
+      MetricName: MemoryUtilization
+      Namespace: CWAgent
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 85
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref WarningAlertsTopic
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: 
+            Fn::ImportValue: !Sub '${ProjectName}-asg-name-${Environment}'
+
+  # Database Alarms
+  DatabaseCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-db-cpu-${Environment}'
+      AlarmDescription: Database CPU utilization is high
+      MetricName: CPUUtilization
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref WarningAlertsTopic
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub '${ProjectName}-mysql-${Environment}'
+
+  DatabaseConnectionsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-db-connections-${Environment}'
+      AlarmDescription: Database connection count is high
+      MetricName: DatabaseConnections
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref WarningAlertsTopic
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub '${ProjectName}-mysql-${Environment}'
+
+  DatabaseFreeStorageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-db-storage-${Environment}'
+      AlarmDescription: Database free storage is low
+      MetricName: FreeStorageSpace
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 2000000000  # 2GB in bytes
+      ComparisonOperator: LessThanThreshold
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub '${ProjectName}-mysql-${Environment}'
+
+  # Cache Alarms
+  CacheHighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-cache-cpu-${Environment}'
+      AlarmDescription: Cache CPU utilization is high
+      MetricName: CPUUtilization
+      Namespace: AWS/ElastiCache
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref WarningAlertsTopic
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Sub '${ProjectName}-redis-${Environment}'
+
+  CacheHighMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-cache-memory-${Environment}'
+      AlarmDescription: Cache memory utilization is high
+      MetricName: DatabaseMemoryUsagePercentage
+      Namespace: AWS/ElastiCache
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 85
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref WarningAlertsTopic
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Sub '${ProjectName}-redis-${Environment}'
+
+  # CloudFront Alarms
+  CloudFrontErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-cdn-error-rate-${Environment}'
+      AlarmDescription: CloudFront error rate is high
+      MetricName: 4xxErrorRate
+      Namespace: AWS/CloudFront
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref WarningAlertsTopic
+      Dimensions:
+        - Name: DistributionId
+          Value: 
+            Fn::ImportValue: !Sub '${ProjectName}-cdn-id-${Environment}'
+
+  # Lambda Function for Custom Metrics
+  CustomMetricsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-custom-metrics-${Environment}'
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: 
+        Fn::ImportValue: !Sub '${ProjectName}-monitoring-role-arn-${Environment}'
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import requests
+          from datetime import datetime
+          
+          cloudwatch = boto3.client('cloudwatch')
+          
+          def lambda_handler(event, context):
+              """
+              Custom metrics collection for Julius Wirth application
+              """
+              
+              # Website availability check
+              try:
+                  alb_dns = event.get('alb_dns', '')
+                  if alb_dns:
+                      response = requests.get(f'http://{alb_dns}', timeout=10)
+                      availability = 1 if response.status_code == 200 else 0
+                      response_time = response.elapsed.total_seconds()
+                      
+                      # Send custom metrics
+                      cloudwatch.put_metric_data(
+                          Namespace='JuliusWirth/Application',
+                          MetricData=[
+                              {
+                                  'MetricName': 'WebsiteAvailability',
+                                  'Value': availability,
+                                  'Unit': 'Count',
+                                  'Timestamp': datetime.utcnow()
+                              },
+                              {
+                                  'MetricName': 'ResponseTime',
+                                  'Value': response_time,
+                                  'Unit': 'Seconds',
+                                  'Timestamp': datetime.utcnow()
+                              }
+                          ]
+                      )
+              except Exception as e:
+                  print(f"Error checking website: {e}")
+                  cloudwatch.put_metric_data(
+                      Namespace='JuliusWirth/Application',
+                      MetricData=[
+                          {
+                              'MetricName': 'WebsiteAvailability',
+                              'Value': 0,
+                              'Unit': 'Count',
+                              'Timestamp': datetime.utcnow()
+                          }
+                      ]
+                  )
+              
+              # Disk space check (placeholder for actual implementation)
+              # This would typically be implemented via CloudWatch Agent
+              
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('Custom metrics sent successfully')
+              }
+      Environment:
+        Variables:
+          ALB_DNS: 
+            Fn::ImportValue: !Sub '${ProjectName}-alb-dns-${Environment}'
+      Timeout: 30
+
+  # EventBridge Rule for Custom Metrics
+  CustomMetricsScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${ProjectName}-custom-metrics-schedule-${Environment}'
+      Description: Schedule custom metrics collection
+      ScheduleExpression: 'rate(5 minutes)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt CustomMetricsFunction.Arn
+          Id: CustomMetricsTarget
+          Input: !Sub |
+            {
+              "alb_dns": "${ALBDNSName}"
+            }
+
+  # Lambda Permission for EventBridge
+  CustomMetricsLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CustomMetricsFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CustomMetricsScheduleRule.Arn
+
+  # Website Availability Alarm
+  WebsiteAvailabilityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-website-availability-${Environment}'
+      AlarmDescription: Website is not available
+      MetricName: WebsiteAvailability
+      Namespace: JuliusWirth/Application
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 0.5
+      ComparisonOperator: LessThanThreshold
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+      OKActions:
+        - !Ref CriticalAlertsTopic
+
+  # Log Insights Queries for Common Issues
+  ErrorLogInsightsQuery:
+    Type: AWS::Logs::QueryDefinition
+    Properties:
+      Name: !Sub '${ProjectName}-error-analysis-${Environment}'
+      LogGroupNames:
+        - Fn::ImportValue: !Sub '${ProjectName}-app-log-group-${Environment}'
+        - Fn::ImportValue: !Sub '${ProjectName}-web-log-group-${Environment}'
+      QueryString: |
+        fields @timestamp, @message
+        | filter @message like /ERROR/
+        | stats count() by bin(5m)
+        | sort @timestamp desc
+
+  DatabaseSlowQueryInsightsQuery:
+    Type: AWS::Logs::QueryDefinition
+    Properties:
+      Name: !Sub '${ProjectName}-slow-queries-${Environment}'
+      LogGroupNames:
+        - Fn::ImportValue: !Sub '${ProjectName}-app-log-group-${Environment}'
+      QueryString: |
+        fields @timestamp, @message
+        | filter @message like /slow query/
+        | stats count() by bin(5m)
+        | sort @timestamp desc
+
+# References to imported values
+Parameters:
+  ALBDNSName:
+    Type: String
+    Default: !ImportValue 
+      Fn::Sub: '${ProjectName}-alb-dns-${Environment}'
+
+Outputs:
+  CriticalAlertsTopicArn:
+    Description: SNS topic for critical alerts
+    Value: !Ref CriticalAlertsTopic
+    Export:
+      Name: !Sub '${ProjectName}-critical-alerts-topic-${Environment}'
+
+  WarningAlertsTopicArn:
+    Description: SNS topic for warning alerts
+    Value: !Ref WarningAlertsTopic
+    Export:
+      Name: !Sub '${ProjectName}-warning-alerts-topic-${Environment}'
+
+  DashboardURL:
+    Description: CloudWatch Dashboard URL
+    Value: !Sub 'https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${ProjectName}-${Environment}-overview'
+    Export:
+      Name: !Sub '${ProjectName}-dashboard-url-${Environment}'
+
+  CustomMetricsFunctionArn:
+    Description: Custom Metrics Lambda Function ARN
+    Value: !GetAtt CustomMetricsFunction.Arn
+    Export:
+      Name: !Sub '${ProjectName}-custom-metrics-function-${Environment}'
+
+  SystemHealthAlarmArn:
+    Description: System Health Composite Alarm ARN
+    Value: !GetAtt SystemHealthAlarm.Arn
+    Export:
+      Name: !Sub '${ProjectName}-system-health-alarm-${Environment}'

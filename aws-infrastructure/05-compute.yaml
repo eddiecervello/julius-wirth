@@ -1,0 +1,424 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Julius Wirth Compute Resources and Load Balancing'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'production'
+    AllowedValues: ['development', 'staging', 'production']
+    Description: Environment name
+  
+  ProjectName:
+    Type: String
+    Default: 'julius-wirth'
+    Description: Project name for resource tagging
+
+  InstanceType:
+    Type: String
+    Default: 't3.small'
+    AllowedValues: ['t3.micro', 't3.small', 't3.medium']
+    Description: EC2 instance type
+
+  MinSize:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 3
+    Description: Minimum number of instances
+
+  MaxSize:
+    Type: Number
+    Default: 3
+    MinValue: 1
+    MaxValue: 10
+    Description: Maximum number of instances
+
+  DesiredCapacity:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 5
+    Description: Desired number of instances
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 Key Pair for SSH access
+
+Resources:
+  # Application Load Balancer
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${ProjectName}-alb-${Environment}'
+      Scheme: internet-facing
+      Type: application
+      IpAddressType: ipv4
+      Subnets:
+        - Fn::ImportValue: !Sub '${ProjectName}-public-subnet-1-${Environment}'
+        - Fn::ImportValue: !Sub '${ProjectName}-public-subnet-2-${Environment}'
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-alb-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ALB Security Group
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Julius Wirth Application Load Balancer
+      VpcId: 
+        Fn::ImportValue: !Sub '${ProjectName}-vpc-id-${Environment}'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP access from internet
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS access from internet
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          DestinationSecurityGroupId: 
+            Fn::ImportValue: !Sub '${ProjectName}-web-sg-id-${Environment}'
+          Description: HTTP to web servers
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-alb-sg-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Update Web Server Security Group to allow ALB access
+  WebServerSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: 
+        Fn::ImportValue: !Sub '${ProjectName}-web-sg-id-${Environment}'
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Description: HTTP access from ALB
+
+  # Target Group
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${ProjectName}-targets-${Environment}'
+      Port: 80
+      Protocol: HTTP
+      VpcId: 
+        Fn::ImportValue: !Sub '${ProjectName}-vpc-id-${Environment}'
+      HealthCheckEnabled: true
+      HealthCheckPath: /user
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetType: instance
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-targets-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ALB Listener (HTTP)
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  # IAM Role for EC2 Instances
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-instance-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - Fn::Sub:
+                      - '${BucketArn}/*'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-public-bucket-${Environment}'
+                  - Fn::Sub:
+                      - '${BucketArn}/*'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-private-bucket-${Environment}'
+                  - Fn::Sub:
+                      - '${BucketArn}'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-public-bucket-${Environment}'
+                  - Fn::Sub:
+                      - '${BucketArn}'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-private-bucket-${Environment}'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - Fn::Sub:
+                      - '${BucketArn}/*'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-deployments-bucket-${Environment}'
+                  - Fn::Sub:
+                      - '${BucketArn}'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-deployments-bucket-${Environment}'
+
+  # Instance Profile
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub '${ProjectName}-instance-profile-${Environment}'
+      Roles:
+        - !Ref EC2InstanceRole
+
+  # Launch Template
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub '${ProjectName}-launch-template-${Environment}'
+      LaunchTemplateData:
+        ImageId: ami-0c02fb55956c7d316  # Amazon Linux 2023 AMI for eu-south-1
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyPairName
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub '${ProjectName}-web-sg-id-${Environment}'
+        IamInstanceProfile:
+          Arn: !GetAtt EC2InstanceProfile.Arn
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: 20
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            yum update -y
+            yum install -y httpd php php-mysqlnd php-gd php-xml php-mbstring php-json
+            
+            # Install Composer
+            curl -sS https://getcomposer.org/installer | php
+            mv composer.phar /usr/local/bin/composer
+            
+            # Install AWS CLI v2
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip
+            ./aws/install
+            
+            # Install CloudWatch agent
+            wget https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm
+            rpm -U ./amazon-cloudwatch-agent.rpm
+            
+            # Start services
+            systemctl start httpd
+            systemctl enable httpd
+            
+            # Create document root
+            mkdir -p /var/www/html
+            chown apache:apache /var/www/html
+            
+            # Download and extract latest deployment
+            aws s3 cp s3://${AWS::StackName}-deployments-${Environment}-${AWS::AccountId}/latest.tar.gz /tmp/ || true
+            if [ -f /tmp/latest.tar.gz ]; then
+                cd /var/www/html
+                tar -xzf /tmp/latest.tar.gz
+                chown -R apache:apache /var/www/html
+                rm /tmp/latest.tar.gz
+            fi
+            
+            # Configure environment variables (these would be set via Parameter Store in production)
+            cat > /var/www/html/.env << 'EOF'
+            DB_NAME=juliuswirth
+            DB_HOST=${DatabaseEndpoint}
+            DB_PORT=3306
+            REDIS_HOST=${RedisEndpoint}
+            REDIS_PORT=6379
+            AWS_S3_BUCKET=${PublicBucket}
+            AWS_S3_PRIVATE_BUCKET=${PrivateBucket}
+            AWS_REGION=eu-south-1
+            EOF
+            
+            # Signal completion
+            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub '${ProjectName}-web-${Environment}'
+              - Key: Project
+                Value: !Ref ProjectName
+              - Key: Environment
+                Value: !Ref Environment
+
+  # Auto Scaling Group
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub '${ProjectName}-asg-${Environment}'
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub '${ProjectName}-private-subnet-1-${Environment}'
+        - Fn::ImportValue: !Sub '${ProjectName}-private-subnet-2-${Environment}'
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: !Ref MinSize
+      MaxSize: !Ref MaxSize
+      DesiredCapacity: !Ref DesiredCapacity
+      TargetGroupARNs:
+        - !Ref TargetGroup
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+      DefaultCooldown: 300
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-asg-${Environment}'
+          PropagateAtLaunch: false
+        - Key: Project
+          Value: !Ref ProjectName
+          PropagateAtLaunch: true
+        - Key: Environment
+          Value: !Ref Environment
+          PropagateAtLaunch: true
+    CreationPolicy:
+      ResourceSignal:
+        Count: !Ref DesiredCapacity
+        Timeout: PT15M
+
+  # Auto Scaling Policies
+  ScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      Cooldown: 300
+      ScalingAdjustment: 1
+      PolicyType: SimpleScaling
+
+  ScaleDownPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      Cooldown: 300
+      ScalingAdjustment: -1
+      PolicyType: SimpleScaling
+
+  # CloudWatch Alarms for Auto Scaling
+  HighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale up on high CPU
+      AlarmActions:
+        - !Ref ScaleUpPolicy
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 70
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroup
+
+  LowCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale down on low CPU
+      AlarmActions:
+        - !Ref ScaleDownPolicy
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 25
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroup
+
+Outputs:
+  ApplicationLoadBalancerDNS:
+    Description: Application Load Balancer DNS name
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub '${ProjectName}-alb-dns-${Environment}'
+
+  ApplicationLoadBalancerZoneId:
+    Description: Application Load Balancer hosted zone ID
+    Value: !GetAtt ApplicationLoadBalancer.CanonicalHostedZoneID
+    Export:
+      Name: !Sub '${ProjectName}-alb-zone-id-${Environment}'
+
+  TargetGroupArn:
+    Description: Target Group ARN
+    Value: !Ref TargetGroup
+    Export:
+      Name: !Sub '${ProjectName}-target-group-arn-${Environment}'
+
+  AutoScalingGroupName:
+    Description: Auto Scaling Group name
+    Value: !Ref AutoScalingGroup
+    Export:
+      Name: !Sub '${ProjectName}-asg-name-${Environment}'

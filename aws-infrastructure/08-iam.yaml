@@ -1,0 +1,545 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Julius Wirth IAM Roles and Policies - Secure Access Management'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'production'
+    AllowedValues: ['development', 'staging', 'production']
+    Description: Environment name
+  
+  ProjectName:
+    Type: String
+    Default: 'julius-wirth'
+    Description: Project name for resource tagging
+
+Resources:
+  # IAM Role for CI/CD Pipeline (GitHub Actions)
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-github-actions-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': sts.amazonaws.com
+              StringLike:
+                'token.actions.githubusercontent.com:sub': 'repo:*/*:*'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess
+        - arn:aws:iam::aws:policy/CloudWatchReadOnlyAccess
+      Policies:
+        - PolicyName: DeploymentPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # S3 Deployment Bucket Access
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - Fn::Sub:
+                      - '${BucketArn}/*'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-deployments-bucket-${Environment}'
+                  - Fn::Sub:
+                      - '${BucketArn}'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-deployments-bucket-${Environment}'
+              # Auto Scaling Group Management
+              - Effect: Allow
+                Action:
+                  - autoscaling:UpdateAutoScalingGroup
+                  - autoscaling:DescribeAutoScalingGroups
+                  - autoscaling:StartInstanceRefresh
+                  - autoscaling:DescribeInstanceRefreshes
+                Resource: '*'
+              # CloudFront Cache Invalidation
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                  - cloudfront:GetInvalidation
+                  - cloudfront:ListInvalidations
+                Resource: '*'
+              # Systems Manager (Parameter Store)
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-github-actions-role-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # IAM Role for Application Server (EC2)
+  ApplicationServerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-app-server-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: ApplicationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # S3 File Storage Access
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  # Public Files Bucket
+                  - Fn::Sub:
+                      - '${BucketArn}/*'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-public-bucket-${Environment}'
+                  - Fn::Sub:
+                      - '${BucketArn}'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-public-bucket-${Environment}'
+                  # Private Files Bucket
+                  - Fn::Sub:
+                      - '${BucketArn}/*'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-private-bucket-${Environment}'
+                  - Fn::Sub:
+                      - '${BucketArn}'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-private-bucket-${Environment}'
+              # Deployment Files Access
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - Fn::Sub:
+                      - '${BucketArn}/*'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-deployments-bucket-${Environment}'
+                  - Fn::Sub:
+                      - '${BucketArn}'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-deployments-bucket-${Environment}'
+              # Systems Manager Parameter Store
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/*'
+              # CloudWatch Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/${ProjectName}-${Environment}*'
+              # CloudWatch Metrics
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: '*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-app-server-role-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Instance Profile for EC2
+  ApplicationServerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub '${ProjectName}-app-server-profile-${Environment}'
+      Roles:
+        - !Ref ApplicationServerRole
+
+  # IAM Role for Database Backup Lambda
+  DatabaseBackupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-db-backup-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DatabaseBackupPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # RDS Snapshot Management
+              - Effect: Allow
+                Action:
+                  - rds:CreateDBSnapshot
+                  - rds:DeleteDBSnapshot
+                  - rds:DescribeDBSnapshots
+                  - rds:DescribeDBInstances
+                Resource: '*'
+              # S3 Backup Storage
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - Fn::Sub:
+                      - '${BucketArn}/*'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-backups-bucket-${Environment}'
+                  - Fn::Sub:
+                      - '${BucketArn}'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-backups-bucket-${Environment}'
+              # SNS Notifications
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: '*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-db-backup-role-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # IAM Role for CloudWatch Monitoring
+  MonitoringRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-monitoring-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: MonitoringPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # CloudWatch Metrics and Alarms
+              - Effect: Allow
+                Action:
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:ListMetrics
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:PutMetricData
+                Resource: '*'
+              # EC2 and Auto Scaling Monitoring
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceStatus
+                  - autoscaling:DescribeAutoScalingGroups
+                  - autoscaling:DescribeAutoScalingInstances
+                Resource: '*'
+              # RDS Monitoring
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBInstances
+                  - rds:DescribeDBClusters
+                Resource: '*'
+              # ElastiCache Monitoring
+              - Effect: Allow
+                Action:
+                  - elasticache:DescribeCacheClusters
+                  - elasticache:DescribeReplicationGroups
+                Resource: '*'
+              # SNS Notifications
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: '*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-monitoring-role-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # IAM User for Emergency Access
+  EmergencyAccessUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub '${ProjectName}-emergency-access-${Environment}'
+      Policies:
+        - PolicyName: EmergencyAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Read-only access to most services
+              - Effect: Allow
+                Action:
+                  - ec2:Describe*
+                  - rds:Describe*
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - cloudwatch:Get*
+                  - cloudwatch:List*
+                  - cloudwatch:Describe*
+                  - logs:Get*
+                  - logs:List*
+                  - logs:Describe*
+                  - autoscaling:Describe*
+                  - elasticache:Describe*
+                  - cloudfront:Get*
+                  - cloudfront:List*
+                  - wafv2:Get*
+                  - wafv2:List*
+                Resource: '*'
+              # Emergency instance restart capability
+              - Effect: Allow
+                Action:
+                  - ec2:RebootInstances
+                  - autoscaling:SetDesiredCapacity
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    'ec2:ResourceTag/Project': !Ref ProjectName
+                    'ec2:ResourceTag/Environment': !Ref Environment
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-emergency-access-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # IAM Group for Developers
+  DevelopersGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: !Sub '${ProjectName}-developers-${Environment}'
+      Policies:
+        - PolicyName: DeveloperPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Read-only access to resources
+              - Effect: Allow
+                Action:
+                  - ec2:Describe*
+                  - rds:Describe*
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - cloudwatch:Get*
+                  - cloudwatch:List*
+                  - cloudwatch:Describe*
+                  - logs:Get*
+                  - logs:List*
+                  - logs:Describe*
+                  - autoscaling:Describe*
+                  - elasticache:Describe*
+                  - cloudfront:Get*
+                  - cloudfront:List*
+                Resource: '*'
+              # S3 Development File Access
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - Fn::Sub:
+                      - '${BucketArn}/development/*'
+                      - BucketArn: 
+                          Fn::Sub:
+                            - 'arn:aws:s3:::${BucketName}'
+                            - BucketName: 
+                                Fn::ImportValue: !Sub '${ProjectName}-public-bucket-${Environment}'
+              # Parameter Store Access
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/development/*'
+
+  # GitHub OIDC Provider (for GitHub Actions)
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCIdentityProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+
+  # Systems Manager Parameters for Environment Variables
+  DatabasePasswordParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${Environment}/database/password'
+      Type: SecureString
+      Description: Database password for Julius Wirth
+      Value: !Sub '${ProjectName}SecurePassword123!'  # Change this in production
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  DatabaseUsernameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${Environment}/database/username'
+      Type: String
+      Description: Database username for Julius Wirth
+      Value: juliuswirth
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  RedisPasswordParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${Environment}/redis/password'
+      Type: SecureString
+      Description: Redis password for Julius Wirth
+      Value: !Sub '${ProjectName}RedisPassword123!'  # Change this in production
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  # CloudWatch Log Groups for Application Logs
+  ApplicationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/ec2/${ProjectName}-${Environment}/application'
+      RetentionInDays: 30
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-app-logs-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  WebServerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/ec2/${ProjectName}-${Environment}/apache'
+      RetentionInDays: 30
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-web-logs-${Environment}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  GitHubActionsRoleArn:
+    Description: GitHub Actions IAM Role ARN
+    Value: !GetAtt GitHubActionsRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-github-role-arn-${Environment}'
+
+  ApplicationServerRoleArn:
+    Description: Application Server IAM Role ARN
+    Value: !GetAtt ApplicationServerRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-app-role-arn-${Environment}'
+
+  ApplicationServerInstanceProfileArn:
+    Description: Application Server Instance Profile ARN
+    Value: !GetAtt ApplicationServerInstanceProfile.Arn
+    Export:
+      Name: !Sub '${ProjectName}-app-profile-arn-${Environment}'
+
+  DatabaseBackupRoleArn:
+    Description: Database Backup Lambda Role ARN
+    Value: !GetAtt DatabaseBackupRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-backup-role-arn-${Environment}'
+
+  MonitoringRoleArn:
+    Description: Monitoring Lambda Role ARN
+    Value: !GetAtt MonitoringRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-monitoring-role-arn-${Environment}'
+
+  EmergencyAccessUserArn:
+    Description: Emergency Access User ARN
+    Value: !GetAtt EmergencyAccessUser.Arn
+    Export:
+      Name: !Sub '${ProjectName}-emergency-user-arn-${Environment}'
+
+  ApplicationLogGroupName:
+    Description: Application Log Group Name
+    Value: !Ref ApplicationLogGroup
+    Export:
+      Name: !Sub '${ProjectName}-app-log-group-${Environment}'
+
+  WebServerLogGroupName:
+    Description: Web Server Log Group Name
+    Value: !Ref WebServerLogGroup
+    Export:
+      Name: !Sub '${ProjectName}-web-log-group-${Environment}'
