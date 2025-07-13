@@ -5,6 +5,7 @@
 sites/*/settings.local.php
 sites/*/settings.*.php
 !sites/*/settings.php
+!sites/*/settings.prod.php
 !sites/example.settings.local.php
 sites/*/services*.yml
 !sites/default/default.services.yml
@@ -127,6 +128,23 @@ vulnerability-reports/
 # AWS specific
 .aws/
 aws-exports.js
+
+# AI/IDE generated files and documentation
+.claude/
+.cursor/
+CLAUDE.md
+*-claude.md
+*-AI-*.md
+*-RESULTS.md
+DEPLOYMENT-*.md
+COST-*.md
+deployment-*.log
+*.ai-generated
+
+# Tar files and deployment packages
+*.tar.gz
+julius-wirth-*.tar.gz
+deployment-*.tar.gz
 
 # Terraform state (if using IaC)
 *.tfstate

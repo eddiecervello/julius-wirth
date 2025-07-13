@@ -15,9 +15,9 @@ if [ ! -f /var/www/html/sites/default/settings.php ] && [ -f /var/www/html/sites
   echo "Creating settings.php from default.settings.php..."
   cp /var/www/html/sites/default/default.settings.php /var/www/html/sites/default/settings.php
   
-  # Add database connection settings
-  if [ "${DRUPAL_DB_HOST}" != "" ]; then
-    echo "Configuring database settings..."
+  # Add database connection settings (only for non-production environments)
+  if [ "${DRUPAL_DB_HOST}" != "" ] && [ "${ENVIRONMENT}" != "production" ]; then
+    echo "Configuring database settings for development..."
     cat << EOF >> /var/www/html/sites/default/settings.php
 
 /**
@@ -42,6 +42,20 @@ mkdir -p /var/www/html/sites/default/files
 chown -R www-data:www-data /var/www/html/sites
 chmod -R 755 /var/www/html/sites/default
 chmod -R 777 /var/www/html/sites/default/files
+
+# Include production settings if in production environment
+if [ "${ENVIRONMENT}" = "production" ] && [ -f /var/www/html/sites/default/settings.prod.php ]; then
+  echo "Including production settings..."
+  cat << 'EOF' >> /var/www/html/sites/default/settings.php
+
+/**
+ * Include production settings
+ */
+if (file_exists(DRUPAL_ROOT . '/sites/default/settings.prod.php')) {
+  include DRUPAL_ROOT . '/sites/default/settings.prod.php';
+}
+EOF
+fi
 
 # Execute CMD
 echo "Starting Apache..."
