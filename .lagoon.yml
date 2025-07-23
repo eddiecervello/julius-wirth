@@ -1,0 +1,133 @@
+docker-compose-yaml: docker-compose.yml
+
+project: julius-wirth-drupal
+
+# Environment configuration
+environments:
+  production:
+    routes:
+      - nginx:
+          - www.julius-wirth.com:
+              tls-acme: true
+              insecure: Redirect
+              hstsEnabled: true
+              hstsMaxAge: 31536000
+              hstsPreload: true
+              hstsIncludeSubdomains: true
+              monitoring-path: "/health.php"
+          - julius-wirth.com:
+              tls-acme: true
+              insecure: Redirect
+              hstsEnabled: true
+              hstsMaxAge: 31536000
+              hstsPreload: true
+              hstsIncludeSubdomains: true
+              monitoring-path: "/health.php"
+    types:
+      mariadb: mariadb-galera  # High availability database
+    monitoring-urls:
+      - https://www.julius-wirth.com/health.php
+    monitoring-statuses:
+      - 200
+    cronjobs:
+      - name: drupal-cron
+        schedule: "M/15 * * * *"  # Every 15 minutes
+        command: drush -r /app cron
+        service: cli
+      - name: database-backup-check
+        schedule: "0 1 * * *"  # Daily at 1 AM
+        command: drush -r /app status
+        service: cli
+  
+  staging:
+    routes:
+      - nginx:
+          - staging.julius-wirth.com:
+              tls-acme: true
+              insecure: Redirect
+              monitoring-path: "/health.php"
+    cronjobs:
+      - name: drupal-cron
+        schedule: "M/30 * * * *"  # Every 30 minutes
+        command: drush -r /app cron
+        service: cli
+
+  develop:
+    routes:
+      - nginx:
+          - develop.julius-wirth.com:
+              tls-acme: true
+              insecure: Redirect
+              monitoring-path: "/health.php"
+
+# Task definitions
+tasks:
+  pre-rollout:
+    - run:
+        name: pre-deployment-backup
+        command: |
+          mkdir -p /app/sites/default/files/backup
+          drush -r /app sql-dump --ordered-dump --gzip --result-file=/app/sites/default/files/backup/pre-deployment-$(date +%Y%m%d-%H%M%S).sql.gz
+          echo "Pre-deployment backup completed"
+        service: cli
+    - run:
+        name: maintenance-mode-on
+        command: drush -r /app vset maintenance_mode 1 --yes
+        service: cli
+    - run:
+        name: clear-cache-pre
+        command: drush -r /app cc all
+        service: cli
+
+  post-rollout:
+    - run:
+        name: update-database
+        command: drush -r /app updb --yes
+        service: cli
+    - run:
+        name: clear-cache-post
+        command: drush -r /app cc all
+        service: cli
+    - run:
+        name: revert-features
+        command: |
+          if drush -r /app pm-list --type=module --status=enabled | grep -q "features"; then
+            drush -r /app fra --yes
+          fi
+        service: cli
+    - run:
+        name: maintenance-mode-off
+        command: drush -r /app vset maintenance_mode 0 --yes
+        service: cli
+    - run:
+        name: deployment-verification
+        command: |
+          drush -r /app status
+          curl -f -s http://localhost/health.php || echo "Health check warning"
+        service: cli
+
+# Backup configuration
+backup-retention:
+  production:
+    monthly: 3
+    weekly: 6
+    daily: 7
+    hourly: 0
+  staging:
+    monthly: 0
+    weekly: 2
+    daily: 7
+    hourly: 0
+
+backup-schedule:
+  production: "M H(22-2) * * *"  # Nightly between 22:00-02:00
+  staging: "M H(2-4) * * *"      # Nightly between 02:00-04:00
+
+# Additional Lagoon configurations
+additional-yaml:
+  lagoon-build-deploy-dind: true  # Enable Docker-in-Docker if needed
+
+# Polysite configuration (if using multi-site)
+polysites:
+  - name: main
+    active_systems_deploy: lagoon_openshiftio

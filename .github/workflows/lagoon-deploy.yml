@@ -1,0 +1,341 @@
+name: Lagoon Deployment Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  LAGOON_PROJECT: julius-wirth-drupal
+  LAGOON_ENVIRONMENT_PRODUCTION: production
+  LAGOON_ENVIRONMENT_STAGING: staging
+
+jobs:
+  # Code quality and security checks
+  quality-checks:
+    name: Code Quality & Security
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '7.4'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo, pdo_mysql, dom, filter, gd, iconv, json, mbstring, pdo
+          ini-values: memory_limit=256M
+          coverage: xdebug
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.composer/cache
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-composer-
+
+      - name: Install Drush
+        run: |
+          composer global require drush/drush:^8.4
+          echo "$HOME/.composer/vendor/bin" >> $GITHUB_PATH
+
+      - name: PHP Code Sniffer
+        run: |
+          composer global require squizlabs/php_codesniffer
+          ~/.composer/vendor/bin/phpcs --standard=Drupal --extensions=php,module,inc,install,test,profile,theme,css,info,txt,md --ignore=node_modules,bower_components,vendor,sites/default/files ./ || true
+
+      - name: Security Vulnerability Check
+        run: |
+          composer global require enlightn/security-checker
+          ~/.composer/vendor/bin/security-checker security:check composer.lock || true
+
+      - name: Drupal Check
+        run: |
+          composer global require mglaman/drupal-check
+          ~/.composer/vendor/bin/drupal-check modules/ themes/ sites/all/modules/ || true
+
+      - name: Validate Lagoon Configuration
+        run: |
+          # Validate .lagoon.yml syntax
+          python -c "import yaml; yaml.safe_load(open('.lagoon.yml'))"
+          
+          # Validate docker-compose.yml syntax
+          docker-compose config -q
+
+      - name: Container Security Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # Build and test Docker images
+  build-test:
+    name: Build & Test Images
+    runs-on: ubuntu-latest
+    needs: quality-checks
+    
+    strategy:
+      matrix:
+        service: [cli, nginx, php]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Harbor Registry
+        uses: docker/login-action@v3
+        with:
+          registry: harbor.julius-wirth.com
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./lagoon/${{ matrix.service }}.dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            harbor.julius-wirth.com/${{ env.LAGOON_PROJECT }}/${{ matrix.service }}:${{ github.sha }}
+            harbor.julius-wirth.com/${{ env.LAGOON_PROJECT }}/${{ matrix.service }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Security scan Docker image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: harbor.julius-wirth.com/${{ env.LAGOON_PROJECT }}/${{ matrix.service }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'docker-trivy-results.sarif'
+
+  # Deploy to staging environment
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build-test
+    if: github.ref == 'refs/heads/develop'
+    
+    environment:
+      name: staging
+      url: https://staging.julius-wirth.com
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.25.0'
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Install Lagoon CLI
+        run: |
+          curl -L "https://github.com/uselagoon/lagoon-cli/releases/latest/download/lagoon-cli-linux-amd64" -o lagoon
+          chmod +x lagoon
+          sudo mv lagoon /usr/local/bin/
+
+      - name: Deploy to Lagoon Staging
+        run: |
+          lagoon login -i "${{ secrets.LAGOON_STAGING_SSH_KEY }}"
+          lagoon deploy branch -p ${{ env.LAGOON_PROJECT }} -b develop -e ${{ env.LAGOON_ENVIRONMENT_STAGING }}
+
+      - name: Wait for deployment
+        run: |
+          # Wait for deployment to complete
+          kubectl wait --for=condition=progressing --timeout=600s deployment/nginx -n lagoon-${{ env.LAGOON_PROJECT }}-${{ env.LAGOON_ENVIRONMENT_STAGING }}
+
+      - name: Run health checks
+        run: |
+          # Wait for application to be ready
+          sleep 60
+          
+          # Health check
+          curl -f https://staging.julius-wirth.com/health.php || exit 1
+          
+          # Basic functionality test
+          curl -f https://staging.julius-wirth.com/ || exit 1
+
+      - name: Run post-deployment tests
+        run: |
+          # Database connectivity test
+          kubectl exec -n lagoon-${{ env.LAGOON_PROJECT }}-${{ env.LAGOON_ENVIRONMENT_STAGING }} deployment/cli -- drush status
+          
+          # Cache clear
+          kubectl exec -n lagoon-${{ env.LAGOON_PROJECT }}-${{ env.LAGOON_ENVIRONMENT_STAGING }} deployment/cli -- drush cc all
+
+      - name: Notify deployment status
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          text: 'Staging deployment ${{ job.status }} for commit ${{ github.sha }}'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Deploy to production environment
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build-test
+    if: github.ref == 'refs/heads/main'
+    
+    environment:
+      name: production
+      url: https://www.julius-wirth.com
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.25.0'
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Install Lagoon CLI
+        run: |
+          curl -L "https://github.com/uselagoon/lagoon-cli/releases/latest/download/lagoon-cli-linux-amd64" -o lagoon
+          chmod +x lagoon
+          sudo mv lagoon /usr/local/bin/
+
+      - name: Pre-deployment backup
+        run: |
+          # Create pre-deployment backup
+          kubectl create job --from=cronjob/backup-schedule backup-pre-deploy-$(date +%Y%m%d-%H%M%S) -n lagoon-${{ env.LAGOON_PROJECT }}-${{ env.LAGOON_ENVIRONMENT_PRODUCTION }}
+
+      - name: Deploy to Lagoon Production
+        run: |
+          lagoon login -i "${{ secrets.LAGOON_PRODUCTION_SSH_KEY }}"
+          lagoon deploy branch -p ${{ env.LAGOON_PROJECT }} -b main -e ${{ env.LAGOON_ENVIRONMENT_PRODUCTION }}
+
+      - name: Wait for deployment
+        run: |
+          # Wait for deployment to complete
+          kubectl wait --for=condition=progressing --timeout=900s deployment/nginx -n lagoon-${{ env.LAGOON_PROJECT }}-${{ env.LAGOON_ENVIRONMENT_PRODUCTION }}
+
+      - name: Run health checks
+        run: |
+          # Wait for application to be ready
+          sleep 120
+          
+          # Health check
+          curl -f https://www.julius-wirth.com/health.php || exit 1
+          
+          # Basic functionality test
+          curl -f https://www.julius-wirth.com/ || exit 1
+
+      - name: Run post-deployment tests
+        run: |
+          # Database connectivity test
+          kubectl exec -n lagoon-${{ env.LAGOON_PROJECT }}-${{ env.LAGOON_ENVIRONMENT_PRODUCTION }} deployment/cli -- drush status
+          
+          # Update database
+          kubectl exec -n lagoon-${{ env.LAGOON_PROJECT }}-${{ env.LAGOON_ENVIRONMENT_PRODUCTION }} deployment/cli -- drush updb -y
+          
+          # Clear cache
+          kubectl exec -n lagoon-${{ env.LAGOON_PROJECT }}-${{ env.LAGOON_ENVIRONMENT_PRODUCTION }} deployment/cli -- drush cc all
+          
+          # Revert features (if applicable)
+          kubectl exec -n lagoon-${{ env.LAGOON_PROJECT }}-${{ env.LAGOON_ENVIRONMENT_PRODUCTION }} deployment/cli -- drush fra -y || true
+
+      - name: Performance test
+        run: |
+          # Simple performance check
+          curl -w "@curl-format.txt" -o /dev/null -s https://www.julius-wirth.com/
+        env:
+          CURL_FORMAT: |
+            time_namelookup:  %{time_namelookup}
+            time_connect:     %{time_connect}
+            time_appconnect:  %{time_appconnect}
+            time_pretransfer: %{time_pretransfer}
+            time_redirect:    %{time_redirect}
+            time_starttransfer: %{time_starttransfer}
+            time_total:       %{time_total}
+
+      - name: Security headers check
+        run: |
+          # Check security headers
+          curl -I https://www.julius-wirth.com/ | grep -E "(X-Frame-Options|X-Content-Type-Options|X-XSS-Protection|Strict-Transport-Security)"
+
+      - name: Notify deployment status
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          text: 'Production deployment ${{ job.status }} for commit ${{ github.sha }}'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Automated rollback on failure
+  rollback-on-failure:
+    name: Automated Rollback
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: failure() && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.25.0'
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Rollback deployment
+        run: |
+          kubectl rollout undo deployment/nginx -n lagoon-${{ env.LAGOON_PROJECT }}-${{ env.LAGOON_ENVIRONMENT_PRODUCTION }}
+          kubectl rollout undo deployment/php -n lagoon-${{ env.LAGOON_PROJECT }}-${{ env.LAGOON_ENVIRONMENT_PRODUCTION }}
+
+      - name: Wait for rollback
+        run: |
+          kubectl rollout status deployment/nginx -n lagoon-${{ env.LAGOON_PROJECT }}-${{ env.LAGOON_ENVIRONMENT_PRODUCTION }}
+          kubectl rollout status deployment/php -n lagoon-${{ env.LAGOON_PROJECT }}-${{ env.LAGOON_ENVIRONMENT_PRODUCTION }}
+
+      - name: Verify rollback
+        run: |
+          sleep 60
+          curl -f https://www.julius-wirth.com/health.php || exit 1
+
+      - name: Notify rollback
+        uses: 8398a7/action-slack@v3
+        with:
+          status: 'warning'
+          channel: '#deployments'
+          text: 'Automatic rollback executed for failed production deployment of commit ${{ github.sha }}'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}

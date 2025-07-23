@@ -1,0 +1,44 @@
+# Production Docker Compose Configuration
+# Uses environment variables for all sensitive values
+version: '3.8'
+
+services:
+  web:
+    build: .
+    ports:
+      - "8080:80"
+    environment:
+      - DRUPAL_DB_HOST=${DRUPAL_DB_HOST:-mariadb}
+      - DRUPAL_DB_NAME=${DRUPAL_DB_NAME}
+      - DRUPAL_DB_USER=${DRUPAL_DB_USER}
+      - DRUPAL_DB_PASSWORD=${DRUPAL_DB_PASSWORD}
+      - DRUPAL_HASH_SALT=${DRUPAL_HASH_SALT}
+      - BASE_URL=${BASE_URL}
+    depends_on:
+      - mariadb
+    networks:
+      - julius-wirth-network
+    volumes:
+      - web_files:/var/www/html/sites/default/files
+
+  mariadb:
+    image: mariadb:10.5
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${DRUPAL_DB_NAME}
+      - MYSQL_USER=${DRUPAL_DB_USER}
+      - MYSQL_PASSWORD=${DRUPAL_DB_PASSWORD}
+    networks:
+      - julius-wirth-network
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      # Import database on first run
+      - ./database/juliush761_mysql_db.sql:/docker-entrypoint-initdb.d/juliush761_mysql_db.sql:ro
+
+networks:
+  julius-wirth-network:
+    driver: bridge
+
+volumes:
+  mariadb_data:
+  web_files:

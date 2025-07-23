@@ -35,6 +35,7 @@ secrets/
 *.key
 *.pem
 *.crt
+.credentials/
 
 # Development configurations
 .lando.local.yml
@@ -103,6 +104,10 @@ adminer.php
 info.php
 phpinfo.php
 test.php
+debug_drupal.php
+check_urls.php
+url_fix.php
+web_url_fix.php
 
 # Testing
 tests/results/
@@ -128,6 +133,8 @@ vulnerability-reports/
 # AWS specific
 .aws/
 aws-exports.js
+*-access-key.pem
+julius-wirth-access-key.pem
 
 # AI/IDE generated files and documentation
 .claude/
@@ -140,6 +147,8 @@ DEPLOYMENT-*.md
 COST-*.md
 deployment-*.log
 *.ai-generated
+*-REPORT.md
+SERVER-ACCESS-GUIDE.md
 
 # Tar files and deployment packages
 *.tar.gz
@@ -156,3 +165,11 @@ deployment-*.tar.gz
 *.backup
 *.old
 ~*
+
+# Deployment scripts with credentials
+cleanup-milan-resources.sh
+simple-ec2-deploy.sh
+user-data.sh
+
+# Third-party library test files (security risk)
+sites/all/libraries/swiftmailer/tests/

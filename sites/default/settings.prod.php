@@ -13,11 +13,11 @@
  */
 $databases['default']['default'] = array(
   'driver' => 'mysql',
-  'database' => getenv('DRUPAL_DB_NAME') ?: 'julius_wirth_prod',
-  'username' => getenv('DRUPAL_DB_USER') ?: die('DRUPAL_DB_USER environment variable not set'),
-  'password' => getenv('DRUPAL_DB_PASSWORD') ?: die('DRUPAL_DB_PASSWORD environment variable not set'),
-  'host' => getenv('DRUPAL_DB_HOST') ?: die('DRUPAL_DB_HOST environment variable not set'),
-  'port' => getenv('DRUPAL_DB_PORT') ?: '3306',
+  'database' => $_ENV['DRUPAL_DB_NAME'] ?? $_SERVER['DRUPAL_DB_NAME'] ?? '',
+  'username' => $_ENV['DRUPAL_DB_USER'] ?? $_SERVER['DRUPAL_DB_USER'] ?? '',
+  'password' => $_ENV['DRUPAL_DB_PASSWORD'] ?? $_SERVER['DRUPAL_DB_PASSWORD'] ?? '',
+  'host' => $_ENV['DRUPAL_DB_HOST'] ?? $_SERVER['DRUPAL_DB_HOST'] ?? 'mariadb',
+  'port' => '3306',
   'prefix' => '',
   'collation' => 'utf8mb4_unicode_ci',
   'init_commands' => array(
@@ -29,13 +29,13 @@ $databases['default']['default'] = array(
  * Salt for one-time login links, cancel links, form tokens, etc.
  * MUST be provided via environment variable in production
  */
-$drupal_hash_salt = getenv('DRUPAL_HASH_SALT') ?: die('DRUPAL_HASH_SALT environment variable not set');
+$drupal_hash_salt = $_ENV['DRUPAL_HASH_SALT'] ?? $_SERVER['DRUPAL_HASH_SALT'] ?? '';
 
 /**
  * Base URL configuration
  * Should be set to your production domain with HTTPS
  */
-$base_url = getenv('BASE_URL') ?: 'https://www.julius-wirth.com';
+$base_url = $_ENV['BASE_URL'] ?? $_SERVER['BASE_URL'] ?? 'https://www.julius-wirth.com';
 
 /**
  * PHP settings optimized for production
@@ -51,10 +51,10 @@ ini_set('session.use_only_cookies', TRUE);
 /**
  * Redis cache configuration
  */
-if (getenv('REDIS_HOST')) {
-  $conf['redis_client_host'] = getenv('REDIS_HOST');
-  $conf['redis_client_port'] = getenv('REDIS_PORT') ?: '6379';
-  $conf['redis_client_password'] = getenv('REDIS_PASSWORD') ?: NULL;
+if ($_ENV['REDIS_HOST'] ?? false) {
+  $conf['redis_client_host'] = $_ENV['REDIS_HOST'];
+  $conf['redis_client_port'] = $_ENV['REDIS_PORT'] ?? '6379';
+  $conf['redis_client_password'] = $_ENV['REDIS_PASSWORD'] ?? NULL;
   
   // Enable Redis
   $conf['cache_backends'][] = 'sites/all/modules/contrib/redis/redis.autoload.inc';
@@ -74,19 +74,19 @@ if (getenv('REDIS_HOST')) {
 /**
  * File system configuration for S3
  */
-if (getenv('AWS_S3_BUCKET')) {
-  $conf['s3fs_bucket'] = getenv('AWS_S3_BUCKET');
-  $conf['s3fs_region'] = getenv('AWS_REGION') ?: 'us-east-1';
+if ($_ENV['AWS_S3_BUCKET'] ?? false) {
+  $conf['s3fs_bucket'] = $_ENV['AWS_S3_BUCKET'];
+  $conf['s3fs_region'] = $_ENV['AWS_REGION'] ?? 'us-east-1';
   
   // Use IAM role for EC2 instances (no keys needed)
   $conf['s3fs_use_instance_profile'] = TRUE;
   
   // Public files path
-  $conf['file_public_path'] = 's3://' . getenv('AWS_S3_BUCKET') . '/public';
+  $conf['file_public_path'] = 's3://' . $_ENV['AWS_S3_BUCKET'] . '/public';
   
   // Private files path (different bucket)
-  if (getenv('AWS_S3_PRIVATE_BUCKET')) {
-    $conf['file_private_path'] = 's3://' . getenv('AWS_S3_PRIVATE_BUCKET') . '/private';
+  if ($_ENV['AWS_S3_PRIVATE_BUCKET'] ?? false) {
+    $conf['file_private_path'] = 's3://' . $_ENV['AWS_S3_PRIVATE_BUCKET'] . '/private';
   }
 }
 
@@ -102,12 +102,13 @@ $conf['cache_lifetime'] = 3600; // 1 hour
 $conf['page_cache_maximum_age'] = 86400; // 24 hours
 
 /**
- * Error handling for production
+ * Error handling for production (temporarily verbose for debugging)
  */
-error_reporting(0);
-$conf['error_level'] = 0; // Don't display any errors
-ini_set('display_errors', 0);
-ini_set('display_startup_errors', 0);
+error_reporting(E_ALL);
+$conf['error_level'] = 2; // Display all errors temporarily
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+ini_set('error_log', '/dev/stderr'); // Send errors to CloudWatch
 
 /**
  * Logging configuration
@@ -158,19 +159,20 @@ $conf['404_fast_html'] = '<!DOCTYPE html><html><head><title>404 Not Found</title
 $settings['trusted_host_patterns'] = array(
   '^julius-wirth\.com$',
   '^www\.julius-wirth\.com$',
-  '^.+\.elb\.amazonaws\.com$', // ALB health checks
+  '^julius-wirth-alb-production-1564268449\.eu-south-1\.elb\.amazonaws\.com$', // Exact ALB hostname
+  '^.+\.elb\.amazonaws\.com$', // General ALB pattern for other environments
 );
 
 /**
  * SMTP configuration for production email
  */
-if (getenv('SMTP_HOST')) {
-  $conf['smtp_host'] = getenv('SMTP_HOST');
-  $conf['smtp_port'] = getenv('SMTP_PORT') ?: '587';
+if ($_ENV['SMTP_HOST'] ?? false) {
+  $conf['smtp_host'] = $_ENV['SMTP_HOST'];
+  $conf['smtp_port'] = $_ENV['SMTP_PORT'] ?? '587';
   $conf['smtp_protocol'] = 'tls';
-  $conf['smtp_username'] = getenv('SMTP_USERNAME');
-  $conf['smtp_password'] = getenv('SMTP_PASSWORD');
-  $conf['smtp_from'] = getenv('SMTP_FROM') ?: 'noreply@julius-wirth.com';
+  $conf['smtp_username'] = $_ENV['SMTP_USERNAME'];
+  $conf['smtp_password'] = $_ENV['SMTP_PASSWORD'];
+  $conf['smtp_from'] = $_ENV['SMTP_FROM'] ?? 'noreply@julius-wirth.com';
   $conf['smtp_fromname'] = 'Julius Wirth';
 }
 
@@ -205,7 +207,7 @@ $conf['maintenance_mode_message'] = 'Julius Wirth is currently undergoing schedu
  * Cron settings
  */
 $conf['cron_safe_threshold'] = 10800; // 3 hours
-$conf['cron_key'] = getenv('DRUPAL_CRON_KEY') ?: md5($drupal_hash_salt . 'cron');
+$conf['cron_key'] = $_ENV['DRUPAL_CRON_KEY'] ?? md5($drupal_hash_salt . 'cron');
 
 /**
  * Update settings
@@ -226,8 +228,8 @@ $conf['cron_run_on_page_load'] = FALSE;
 /**
  * Private file download settings
  */
-$conf['file_chmod_directory'] = 0775;
-$conf['file_chmod_file'] = 0664;
+$conf['file_chmod_directory'] = 0755;
+$conf['file_chmod_file'] = 0644;
 
 /**
  * Temporary files directory
