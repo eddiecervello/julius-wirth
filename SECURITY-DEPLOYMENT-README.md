@@ -31,7 +31,7 @@ MYSQL_ROOT_PASSWORD=your_secure_root_password
 
 # Drupal Security
 DRUPAL_HASH_SALT=your_64_character_random_hash_salt_here
-BASE_URL=https://www.julius-wirth.com
+BASE_URL=https://juliuswirth.com
 DRUPAL_CRON_KEY=your_random_cron_key_here
 ```
 

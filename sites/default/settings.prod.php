@@ -35,7 +35,7 @@ $drupal_hash_salt = $_ENV['DRUPAL_HASH_SALT'] ?? $_SERVER['DRUPAL_HASH_SALT'] ??
  * Base URL configuration
  * Should be set to your production domain with HTTPS
  */
-$base_url = $_ENV['BASE_URL'] ?? $_SERVER['BASE_URL'] ?? 'https://www.julius-wirth.com';
+$base_url = $_ENV['BASE_URL'] ?? $_SERVER['BASE_URL'] ?? 'https://juliuswirth.com';
 
 /**
  * PHP settings optimized for production
