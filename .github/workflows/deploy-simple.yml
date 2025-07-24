@@ -65,35 +65,28 @@ jobs:
         
         echo "Starting deployment process..."
         
-        # Clone or update repository
-        if [ -d /opt/julius-wirth ]; then
-            echo "Updating existing repository..."
-            cd /opt/julius-wirth
-            git pull origin main
-        else
-            echo "Cloning repository..."
-            cd /opt
-            git clone https://github.com/hu-friedy/julius-wirth.git
-            cd julius-wirth
-        fi
-        
-        # Copy updated configuration files
-        echo "Updating configuration files..."
-        sudo cp nginx-production.conf /etc/nginx/sites-available/juliuswirth
+        # Download and apply latest configuration
+        echo "Downloading latest configuration..."
+        curl -sL https://raw.githubusercontent.com/hu-friedy/julius-wirth/main/nginx-production.conf -o /tmp/nginx-production.conf
         
         # Test nginx configuration
         echo "Testing nginx configuration..."
+        sudo cp /tmp/nginx-production.conf /etc/nginx/sites-available/juliuswirth.test
         sudo nginx -t
         
-        # Reload nginx if test passes
-        echo "Reloading nginx..."
-        sudo nginx -s reload
-        
-        # Navigate to web root and update Drupal
-        echo "Updating Drupal..."
-        cd /var/www/html
+        if [ $? -eq 0 ]; then
+            echo "Nginx config test passed, applying..."
+            sudo cp /tmp/nginx-production.conf /etc/nginx/sites-available/juliuswirth
+            sudo nginx -s reload
+            echo "✅ Nginx updated successfully"
+        else
+            echo "❌ Nginx config test failed"
+            sudo rm /etc/nginx/sites-available/juliuswirth.test
+            exit 1
+        fi
         
         # Clear Drupal cache
+        echo "Clearing Drupal cache..."
         docker exec julius-wirth-web-1 drush cc all || echo "Cache clear warning - continuing"
         
         # Run database updates
