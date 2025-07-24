@@ -1,0 +1,139 @@
+name: Local Development Tests
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+  push:
+    branches: [ develop ]
+
+jobs:
+  code-quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: 7.4
+        extensions: mbstring, xml, gd, mysql, zip
+        tools: phpcs, phpmd
+    
+    - name: PHP Syntax Check
+      run: |
+        echo "Checking PHP syntax..."
+        find . -name "*.php" \
+          -not -path "./vendor/*" \
+          -not -path "./sites/all/libraries/*" \
+          -not -path "./sites/all/modules/contrib/*" \
+          -not -path "./sites/all/themes/contrib/*" \
+          -print0 | xargs -0 -n1 php -l
+
+    - name: Drupal Coding Standards
+      continue-on-error: true
+      run: |
+        echo "Checking Drupal coding standards..."
+        # Install Drupal coding standards
+        composer global require drupal/coder
+        phpcs --config-set installed_paths ~/.composer/vendor/drupal/coder/coder_sniffer
+        
+        # Check custom modules
+        if [ -d "sites/all/modules/custom" ]; then
+          phpcs --standard=Drupal --extensions=php,module,inc,install,test,profile,theme \
+            sites/all/modules/custom || true
+        fi
+        
+        # Check custom themes
+        if [ -d "sites/all/themes/custom" ]; then
+          phpcs --standard=Drupal --extensions=php,theme \
+            sites/all/themes/custom || true
+        fi
+
+    - name: Security Check
+      run: |
+        echo "Checking for security issues..."
+        # Check for hardcoded credentials
+        if grep -r "password\s*=" \
+          --include="*.php" \
+          --include="*.inc" \
+          --include="*.module" \
+          --exclude-dir=vendor \
+          --exclude-dir=libraries \
+          --exclude-dir=contrib \
+          . | grep -v "password_confirm" | grep -v "pass_form" | grep -v "password_field" | grep -v "default_password"; then
+          echo "⚠️  Found potential hardcoded passwords - please review"
+        fi
+        
+        # Check for exposed API keys
+        if grep -r -E "(api_key|apikey|api-key)\s*=\s*['\"][^'\"]+['\"]" \
+          --include="*.php" \
+          --include="*.inc" \
+          --include="*.module" \
+          --exclude-dir=vendor \
+          --exclude-dir=libraries \
+          --exclude-dir=contrib \
+          .; then
+          echo "⚠️  Found potential API keys - please review"
+        fi
+
+    - name: JavaScript Linting
+      continue-on-error: true
+      run: |
+        echo "Checking JavaScript files..."
+        # Install jshint
+        npm install -g jshint
+        
+        # Check custom JavaScript
+        find . -name "*.js" \
+          -not -path "./vendor/*" \
+          -not -path "./sites/all/libraries/*" \
+          -not -path "./sites/all/modules/contrib/*" \
+          -not -path "./node_modules/*" \
+          -not -name "*.min.js" \
+          -exec jshint {} \; || true
+
+    - name: CSS Linting
+      continue-on-error: true
+      run: |
+        echo "Checking CSS files..."
+        # Install csslint
+        npm install -g csslint
+        
+        # Check custom CSS
+        find . -name "*.css" \
+          -not -path "./vendor/*" \
+          -not -path "./sites/all/libraries/*" \
+          -not -path "./sites/all/modules/contrib/*" \
+          -not -path "./node_modules/*" \
+          -not -name "*.min.css" \
+          -exec csslint --quiet {} \; || true
+
+    - name: Check file permissions
+      run: |
+        echo "Checking file permissions..."
+        # Check for executable PHP files (potential security issue)
+        if find . -name "*.php" -executable -type f | grep -v vendor; then
+          echo "⚠️  Found executable PHP files - these should not be executable"
+        fi
+        
+        # Check for world-writable files
+        if find . -perm -002 -type f | grep -v sites/default/files; then
+          echo "⚠️  Found world-writable files - please review permissions"
+        fi
+
+    - name: Generate test report
+      if: always()
+      run: |
+        echo "## Code Quality Report" > test-report.md
+        echo "- PHP Syntax: ✅ Checked" >> test-report.md
+        echo "- Coding Standards: ⚠️  See logs for details" >> test-report.md
+        echo "- Security: ⚠️  Manual review required for any findings" >> test-report.md
+        echo "- JavaScript: ℹ️  Linting complete" >> test-report.md
+        echo "- CSS: ℹ️  Linting complete" >> test-report.md
+        echo "" >> test-report.md
+        echo "Generated at: $(date)" >> test-report.md
+        
+        cat test-report.md

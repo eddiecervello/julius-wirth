@@ -43,7 +43,7 @@ Simple single-server deployment on EC2 with Docker Compose.
 3. **Deploy Application**: SSH to server and run `/opt/julius-wirth/deploy.sh`
 4. **Setup SSL**: Run `/opt/julius-wirth/setup-ssl.sh`
 
-**Production URL**: https://www.julius-wirth.com
+**Production URL**: https://juliuswirth.com
 
 ## 📁 Project Structure
 
@@ -97,7 +97,7 @@ DRUPAL_DB_HOST=mariadb
 
 # Security (Required)
 DRUPAL_HASH_SALT=your_64_char_hash_salt
-BASE_URL=https://www.julius-wirth.com
+BASE_URL=https://juliuswirth.com
 DRUPAL_CRON_KEY=your_cron_key
 
 # Generate secure values:
@@ -111,6 +111,7 @@ DRUPAL_CRON_KEY=your_cron_key
 - Webform (contact forms)
 - EU Cookie Compliance (GDPR)
 - SwiftMailer (email)
+- XML Sitemap (SEO)
 
 ## 📋 Development Workflow
 
@@ -132,8 +133,9 @@ DRUPAL_CRON_KEY=your_cron_key
 
 3. **Deployment**
    - Push to main branch triggers automated deployment
-   - Docker image built and pushed to ECR
-   - ECS service updated with new image
+   - GitHub Actions runs tests and deploys directly to production
+   - Nginx configuration updated automatically
+   - Drupal cache cleared and database updates applied
    - Health checks verify deployment
 
 ## 🔒 Security
@@ -142,7 +144,8 @@ DRUPAL_CRON_KEY=your_cron_key
 - Environment variables for sensitive data
 - VPC with private subnets for database
 - Security groups with minimal access
-- SSL/TLS encryption (when configured)
+- SSL/TLS encryption with Let's Encrypt
+- HSTS and comprehensive security headers
 - Regular security updates
 
 ### Development Security
@@ -234,7 +237,9 @@ lando drush watchdog-show     # View error logs
 
 ## 📋 Future Improvements (TODO)
 
-### Security & Reliability (Recommended by Amazon Q)
+### Security & Reliability
+- [x] **Domain Migration**: Updated from julius-wirth.com to juliuswirth.com ✅
+- [x] **XML Sitemap**: Installed and configured XML sitemap module for SEO ✅
 - [ ] **Database Redundancy**: Migrate to RDS Multi-AZ for high availability
 - [ ] **Load Balancing**: Add Application Load Balancer for traffic distribution  
 - [ ] **Container Orchestration**: Migrate to ECS Fargate for better service management
@@ -250,11 +255,13 @@ lando drush watchdog-show     # View error logs
 - [ ] **SSH Access**: Restrict SSH security group to specific IP addresses
 - [ ] **Secrets Management**: Migrate to AWS Secrets Manager for credentials
 - [ ] **WAF**: Implement AWS WAF for application-level protection  
-- [ ] **Security Headers**: Configure comprehensive security headers in Nginx
-- [ ] **SSL Configuration**: Implement HSTS and proper SSL configuration
+- [x] **Security Headers**: Configure comprehensive security headers in Nginx ✅
+- [x] **SSL Configuration**: Implement HSTS and proper SSL configuration ✅
 - [ ] **Container Security**: Regular container image scanning and updates
 
 ### Performance Optimizations (Medium Priority)  
+- [x] **Static Asset Loading**: Fixed 404 errors and proper MIME type handling ✅
+- [x] **Content Security Policy**: Configured CSP to allow necessary external resources ✅
 - [ ] **PHP OpCache**: Optimize PHP OPcache configuration
 - [ ] **Database Optimization**: Implement query optimization and indexing
 - [ ] **Static Asset Optimization**: CDN integration for images and CSS/JS
@@ -267,10 +274,6 @@ lando drush watchdog-show     # View error logs
 - [ ] **Log Aggregation**: Centralized logging with CloudWatch Logs
 - [ ] **Health Checks**: Comprehensive application health monitoring
 - [ ] **Documentation**: API documentation and deployment runbooks
-
-## 📞 Contact
-
-For technical support and maintenance questions, refer to the project documentation or create an issue in the repository.
 
 ---
 

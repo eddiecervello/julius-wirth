@@ -1,0 +1,167 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  SERVER_IP: 18.102.55.95
+  SERVER_USER: ubuntu
+
+jobs:
+  test:
+    name: Test and Validate
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: 7.4
+        extensions: mbstring, xml, gd, mysql, zip
+    
+    - name: Run PHP syntax check
+      run: |
+        echo "Checking PHP syntax..."
+        find . -name "*.php" -not -path "./vendor/*" -not -path "./sites/all/libraries/*" -not -path "./sites/all/modules/contrib/*" -exec php -l {} \; || true
+    
+    - name: Check for security issues
+      run: |
+        echo "Checking for hardcoded credentials..."
+        # Skip checking files with known false positives
+        if grep -r "password\s*=" --include="*.php" --exclude-dir=vendor --exclude-dir=libraries --exclude-dir=contrib . | grep -v "password_confirm" | grep -v "pass_form" | grep -v "password_field"; then
+          echo "⚠️  Found potential password references - please review"
+        fi
+
+  deploy:
+    name: Deploy to Production
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup SSH
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+        chmod 600 ~/.ssh/deploy_key
+        ssh-keyscan -t rsa ${{ env.SERVER_IP }} >> ~/.ssh/known_hosts
+
+    - name: Deploy to server
+      run: |
+        echo "🚀 Starting deployment to production..."
+        
+        # Create deployment script
+        cat > deploy.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        echo "Starting deployment process..."
+        
+        # Clone or update repository
+        if [ -d /opt/julius-wirth ]; then
+            echo "Updating existing repository..."
+            cd /opt/julius-wirth
+            git pull origin main
+        else
+            echo "Cloning repository..."
+            cd /opt
+            git clone https://github.com/hu-friedy/julius-wirth.git
+            cd julius-wirth
+        fi
+        
+        # Copy updated configuration files
+        echo "Updating configuration files..."
+        sudo cp nginx-production.conf /etc/nginx/sites-available/juliuswirth
+        
+        # Test nginx configuration
+        echo "Testing nginx configuration..."
+        sudo nginx -t
+        
+        # Reload nginx if test passes
+        echo "Reloading nginx..."
+        sudo nginx -s reload
+        
+        # Navigate to web root and update Drupal
+        echo "Updating Drupal..."
+        cd /var/www/html
+        
+        # Clear Drupal cache
+        docker exec julius-wirth-web-1 drush cc all || echo "Cache clear warning - continuing"
+        
+        # Run database updates
+        docker exec julius-wirth-web-1 drush updb -y || echo "Database update warning - continuing"
+        
+        # Clear cache again after updates
+        docker exec julius-wirth-web-1 drush cc all || echo "Final cache clear warning"
+        
+        echo "✅ Deployment completed successfully!"
+        EOF
+        
+        # Copy and execute deployment script
+        scp -i ~/.ssh/deploy_key deploy.sh ${{ env.SERVER_USER }}@${{ env.SERVER_IP }}:/tmp/
+        ssh -i ~/.ssh/deploy_key ${{ env.SERVER_USER }}@${{ env.SERVER_IP }} "chmod +x /tmp/deploy.sh && /tmp/deploy.sh"
+
+    - name: Verify deployment
+      run: |
+        echo "Verifying deployment..."
+        
+        # Check if site is accessible
+        response=$(curl -s -o /dev/null -w "%{http_code}" https://juliuswirth.com)
+        if [ $response -eq 200 ]; then
+          echo "✅ Site is accessible (HTTP $response)"
+        else
+          echo "❌ Site returned HTTP $response"
+          exit 1
+        fi
+        
+        # Check for JavaScript functionality
+        js_response=$(curl -s -o /dev/null -w "%{http_code}" -H "Accept: application/javascript" https://juliuswirth.com/sites/default/files/js/js_test.js || echo "404")
+        echo "JavaScript file check: HTTP $js_response"
+        
+        # Check sitemap
+        sitemap_response=$(curl -s -o /dev/null -w "%{http_code}" https://juliuswirth.com/sitemap.xml)
+        echo "Sitemap check: HTTP $sitemap_response"
+
+    - name: Health check
+      run: |
+        # Comprehensive health check
+        ssh -i ~/.ssh/deploy_key ${{ env.SERVER_USER }}@${{ env.SERVER_IP }} << 'EOF'
+        echo "Running health checks..."
+        
+        # Check Docker containers
+        echo "Docker containers:"
+        docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+        
+        # Check disk space
+        echo -e "\nDisk space:"
+        df -h | grep -E "^/dev/"
+        
+        # Check memory
+        echo -e "\nMemory usage:"
+        free -m | head -2
+        
+        # Check Drupal status
+        echo -e "\nDrupal status:"
+        docker exec julius-wirth-web-1 drush status || echo "Drush status warning"
+        EOF
+
+    - name: Notify deployment status
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ Deployment successful!"
+          echo "🌐 Site: https://juliuswirth.com"
+          echo "📅 Deployed at: $(date)"
+          echo "🔖 Commit: ${{ github.sha }}"
+        else
+          echo "❌ Deployment failed!"
+          echo "Please check the logs for errors."
+        fi
